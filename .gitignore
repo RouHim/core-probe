@@ -1,0 +1,4 @@
+/target
+*.swp
+.sisyphus/evidence/
+.sisyphus/notepads/
