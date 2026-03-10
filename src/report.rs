@@ -12,6 +12,7 @@ use crate::coordinator::{CoreStatus, CoreTestResult, CycleResults};
 use crate::cpu_topology::CpuTopology;
 use crate::error_parser::MprimeErrorType;
 use crate::mce_monitor::MceErrorType;
+use crate::uefi_reader::UefiSettings;
 
 /// ANSI color codes for terminal output
 const COLOR_RED: &str = "\x1b[31m";
@@ -33,15 +34,21 @@ const BOX_TEE_RIGHT: &str = "╣";
 pub struct StabilityReport<'a> {
     results: &'a CycleResults,
     topology: &'a CpuTopology,
+    uefi_settings: Option<&'a UefiSettings>,
     quiet: bool,
 }
 
 impl<'a> StabilityReport<'a> {
     /// Create a new report from cycle results
-    pub fn new(results: &'a CycleResults, topology: &'a CpuTopology) -> Self {
+    pub fn new(
+        results: &'a CycleResults,
+        topology: &'a CpuTopology,
+        uefi_settings: Option<&'a UefiSettings>,
+    ) -> Self {
         Self {
             results,
             topology,
+            uefi_settings,
             quiet: false,
         }
     }
@@ -66,6 +73,10 @@ impl<'a> StabilityReport<'a> {
         // Header
         output.push_str(&self.format_header(use_colors));
         output.push('\n');
+
+        if let Some(uefi_section) = self.format_uefi_section(use_colors) {
+            output.push_str(&uefi_section);
+        }
 
         // Per-core results
         if self.results.results.is_empty() {
@@ -142,6 +153,99 @@ impl<'a> StabilityReport<'a> {
         output.push_str(BOX_BOTTOM_RIGHT);
 
         output
+    }
+
+    fn format_uefi_section(&self, use_colors: bool) -> Option<String> {
+        let settings = self.uefi_settings?;
+        let mut output = String::new();
+
+        output.push_str(&self.format_separator(use_colors));
+        output.push('\n');
+
+        if !settings.available {
+            let yellow = if use_colors { COLOR_YELLOW } else { "" };
+            let reset = if use_colors { COLOR_RESET } else { "" };
+            output.push_str(&format_box_line(&format!(
+                "{yellow}⚠ UEFI Settings: Unavailable{reset}"
+            )));
+            output.push('\n');
+            output.push_str(&format_box_line(
+                " Run as root for UEFI/BIOS settings in report",
+            ));
+            output.push('\n');
+            output.push_str(&self.format_separator(use_colors));
+            output.push('\n');
+            return Some(output);
+        }
+
+        output.push_str(&format_box_line(" UEFI/BIOS Settings"));
+        output.push('\n');
+
+        if let Some(pbo_status) = settings.pbo_status.as_deref() {
+            output.push_str(&format_box_line(&format!("   PBO Status: {pbo_status}")));
+            output.push('\n');
+        }
+
+        if let Some(limits) = &settings.pbo_limits {
+            let parts: Vec<String> = [
+                limits
+                    .ppt_limit
+                    .as_deref()
+                    .map(|value| format!("PPT: {value}")),
+                limits
+                    .tdc_limit
+                    .as_deref()
+                    .map(|value| format!("TDC: {value}")),
+                limits
+                    .edc_limit
+                    .as_deref()
+                    .map(|value| format!("EDC: {value}")),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+
+            if !parts.is_empty() {
+                output.push_str(&format_box_line(&format!(
+                    "   Limits: {}",
+                    parts.join(" | ")
+                )));
+                output.push('\n');
+            }
+        }
+
+        if let Some(agesa_version) = settings.agesa_version.as_deref() {
+            output.push_str(&format_box_line(&format!(
+                "   AGESA Version: {agesa_version}"
+            )));
+            output.push('\n');
+        }
+
+        if let Some(offsets) = &settings.curve_optimizer_offsets {
+            if !offsets.is_empty() {
+                output.push_str(&format_box_line("   Curve Optimizer Offsets:"));
+                output.push('\n');
+
+                let entries: Vec<(u32, i32)> = offsets
+                    .iter()
+                    .map(|(core, offset)| (*core, *offset))
+                    .collect();
+                for chunk in entries.chunks(3) {
+                    let columns = chunk
+                        .iter()
+                        .map(|(core, offset)| format!("Core {:2}: {:4}", core, offset))
+                        .collect::<Vec<_>>()
+                        .join("  ");
+                    output.push_str(&format_box_line(&format!("     {columns}")));
+                    output.push('\n');
+                }
+            }
+        }
+
+        output.push_str(&self.format_separator(use_colors));
+        output.push('\n');
+
+        Some(output)
     }
 
     fn format_no_data(&self, _use_colors: bool) -> String {
@@ -382,6 +486,37 @@ impl<'a> StabilityReport<'a> {
     }
 }
 
+fn format_box_line(content: &str) -> String {
+    let padding = 62usize.saturating_sub(visible_len(content));
+    format!(
+        "{BOX_VERTICAL}{content}{}{BOX_VERTICAL}",
+        " ".repeat(padding)
+    )
+}
+
+fn visible_len(text: &str) -> usize {
+    let mut len = 0;
+    let mut chars = text.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            if matches!(chars.peek(), Some('[')) {
+                chars.next();
+                for next in chars.by_ref() {
+                    if ('@'..='~').contains(&next) {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+
+        len += 1;
+    }
+
+    len
+}
+
 fn format_duration(duration: Duration) -> String {
     let total_secs = duration.as_secs();
     let hours = total_secs / 3600;
@@ -404,6 +539,7 @@ mod tests {
     use crate::cpu_topology::CpuTopology;
     use crate::error_parser::{MprimeError, MprimeErrorType};
     use crate::mce_monitor::{MceError, MceErrorType};
+    use crate::uefi_reader::{PboLimits, UefiSettings};
     use std::collections::BTreeMap;
     use std::time::Duration;
 
@@ -416,6 +552,23 @@ mod tests {
             core_map: BTreeMap::from([(0, vec![0]), (1, vec![1])]),
             cpu_brand: None,
             cpu_frequency_mhz: None,
+        }
+    }
+
+    fn build_test_cycle_results_stable() -> CycleResults {
+        CycleResults {
+            results: vec![CoreTestResult {
+                core_id: 0,
+                logical_cpu_ids: vec![0],
+                status: CoreStatus::Passed,
+                mprime_errors: Vec::new(),
+                mce_errors: Vec::new(),
+                duration_tested: Duration::from_secs(360),
+                iterations_completed: 3,
+            }],
+            total_duration: Duration::from_secs(360),
+            iterations_completed: 3,
+            interrupted: false,
         }
     }
 
@@ -450,7 +603,7 @@ mod tests {
         };
 
         // WHEN: Generating report
-        let report = StabilityReport::new(&results, &topology);
+        let report = StabilityReport::new(&results, &topology, None);
         let output = report.generate().expect("report generation should succeed");
 
         // THEN: Shows stable summary
@@ -496,7 +649,7 @@ mod tests {
         };
 
         // WHEN: Generating report
-        let report = StabilityReport::new(&results, &topology);
+        let report = StabilityReport::new(&results, &topology, None);
         let output = report.generate().expect("report generation should succeed");
 
         // THEN: Highlights unstable core
@@ -534,7 +687,7 @@ mod tests {
         };
 
         // WHEN: Generating report
-        let report = StabilityReport::new(&results, &topology);
+        let report = StabilityReport::new(&results, &topology, None);
         let output = report.generate().expect("report generation should succeed");
 
         // THEN: Includes MCE details
@@ -575,7 +728,7 @@ mod tests {
         };
 
         // WHEN: Generating report
-        let report = StabilityReport::new(&results, &topology);
+        let report = StabilityReport::new(&results, &topology, None);
         let output = report.generate().expect("report generation should succeed");
 
         // THEN: Shows interrupted status
@@ -603,13 +756,151 @@ mod tests {
         };
 
         // WHEN: Generating report
-        let report = StabilityReport::new(&results, &topology);
+        let report = StabilityReport::new(&results, &topology, None);
         let output = report.generate().expect("report generation should succeed");
 
         // THEN: Shows iteration count
         assert!(output.contains("(3/3 iterations)"));
         assert!(output.contains("Iterations: 3"));
         assert!(output.contains("18m 0s"));
+    }
+
+    #[test]
+    fn given_uefi_available_with_pbo_when_formatting_then_shows_pbo_status() {
+        // GIVEN: Available UEFI settings with PBO status
+        let settings = UefiSettings {
+            available: true,
+            pbo_status: Some("Enabled".to_string()),
+            ..Default::default()
+        };
+        let results = build_test_cycle_results_stable();
+        let topology = build_test_topology();
+
+        // WHEN: Generating report
+        let report = StabilityReport::new(&results, &topology, Some(&settings));
+        let output = report.generate().expect("report generation should succeed");
+
+        // THEN: Shows PBO status in UEFI section
+        assert!(output.contains("UEFI/BIOS Settings"));
+        assert!(output.contains("PBO Status: Enabled"));
+    }
+
+    #[test]
+    fn given_uefi_with_limits_when_formatting_then_shows_present_limits_only() {
+        // GIVEN: Available UEFI settings with partial PBO limits
+        let settings = UefiSettings {
+            available: true,
+            pbo_limits: Some(PboLimits {
+                ppt_limit: Some("142W".to_string()),
+                tdc_limit: None,
+                edc_limit: Some("180A".to_string()),
+            }),
+            ..Default::default()
+        };
+        let results = build_test_cycle_results_stable();
+        let topology = build_test_topology();
+
+        // WHEN: Generating report
+        let report = StabilityReport::new(&results, &topology, Some(&settings));
+        let output = report.generate().expect("report generation should succeed");
+
+        // THEN: Shows only populated limit fields
+        assert!(output.contains("Limits: PPT: 142W | EDC: 180A"));
+        assert!(!output.contains("TDC:"));
+    }
+
+    #[test]
+    fn given_uefi_with_agesa_when_formatting_then_shows_agesa_version() {
+        // GIVEN: Available UEFI settings with AGESA version
+        let settings = UefiSettings {
+            available: true,
+            agesa_version: Some("ComboAM4v2PI 1.2.0.C".to_string()),
+            ..Default::default()
+        };
+        let results = build_test_cycle_results_stable();
+        let topology = build_test_topology();
+
+        // WHEN: Generating report
+        let report = StabilityReport::new(&results, &topology, Some(&settings));
+        let output = report.generate().expect("report generation should succeed");
+
+        // THEN: Shows AGESA version in UEFI section
+        assert!(output.contains("AGESA Version: ComboAM4v2PI 1.2.0.C"));
+    }
+
+    #[test]
+    fn given_uefi_with_curve_optimizer_offsets_when_formatting_then_shows_three_column_rows() {
+        // GIVEN: Available UEFI settings with multiple CO offsets
+        let settings = UefiSettings {
+            available: true,
+            curve_optimizer_offsets: Some(BTreeMap::from([(0, -30), (1, -25), (2, -20), (3, -15)])),
+            ..Default::default()
+        };
+        let results = build_test_cycle_results_stable();
+        let topology = build_test_topology();
+
+        // WHEN: Generating report
+        let report = StabilityReport::new(&results, &topology, Some(&settings));
+        let output = report.generate().expect("report generation should succeed");
+
+        // THEN: Shows offsets grouped into rows of three columns
+        assert!(output.contains("Curve Optimizer Offsets:"));
+        assert!(output.contains("Core  0:  -30  Core  1:  -25  Core  2:  -20"));
+        assert!(output.contains("Core  3:  -15"));
+    }
+
+    #[test]
+    fn given_uefi_unavailable_when_formatting_then_shows_unavailable_notice() {
+        // GIVEN: Unavailable UEFI settings
+        let settings = UefiSettings::unavailable("permission denied");
+        let results = build_test_cycle_results_stable();
+        let topology = build_test_topology();
+
+        // WHEN: Generating report
+        let report = StabilityReport::new(&results, &topology, Some(&settings));
+        let output = report.generate().expect("report generation should succeed");
+
+        // THEN: Shows unavailable notice
+        assert!(output.contains("⚠ UEFI Settings: Unavailable"));
+        assert!(output.contains("Run as root for UEFI/BIOS settings in report"));
+    }
+
+    #[test]
+    fn given_no_uefi_settings_when_formatting_then_omits_uefi_section() {
+        // GIVEN: No UEFI settings were provided
+        let results = build_test_cycle_results_stable();
+        let topology = build_test_topology();
+
+        // WHEN: Generating report
+        let report = StabilityReport::new(&results, &topology, None);
+        let output = report.generate().expect("report generation should succeed");
+
+        // THEN: Omits UEFI section entirely
+        assert!(!output.contains("UEFI/BIOS Settings"));
+        assert!(!output.contains("UEFI Settings: Unavailable"));
+    }
+
+    #[test]
+    fn given_uefi_settings_when_generating_then_places_section_before_per_core_results() {
+        // GIVEN: UEFI settings are available
+        let settings = UefiSettings {
+            available: true,
+            pbo_status: Some("Enabled".to_string()),
+            ..Default::default()
+        };
+        let results = build_test_cycle_results_stable();
+        let topology = build_test_topology();
+
+        // WHEN: Generating report
+        let report = StabilityReport::new(&results, &topology, Some(&settings));
+        let output = report.generate().expect("report generation should succeed");
+
+        // THEN: Places UEFI section before per-core results
+        let uefi_index = output
+            .find("UEFI/BIOS Settings")
+            .expect("UEFI section present");
+        let core_index = output.find("Core  0:").expect("core results present");
+        assert!(uefi_index < core_index);
     }
 
     #[test]
@@ -624,7 +915,7 @@ mod tests {
         };
 
         // WHEN: Generating report
-        let report = StabilityReport::new(&results, &topology);
+        let report = StabilityReport::new(&results, &topology, None);
         let output = report.generate().expect("report generation should succeed");
 
         // THEN: Shows no data message

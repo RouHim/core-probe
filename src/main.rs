@@ -153,7 +153,7 @@ fn run_coordinator_and_report(
         .run(topology, extracted)
         .context("coordinator run failed")?;
 
-    let report = StabilityReport::new(&results, topology)
+    let report = StabilityReport::new(&results, topology, None)
         .with_quiet(args.quiet)
         .generate()
         .context("failed to generate stability report")?;
