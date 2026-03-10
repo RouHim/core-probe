@@ -59,6 +59,10 @@ struct Args {
     /// run FFT preset benchmark to find fastest instability detection preset
     #[argh(switch)]
     benchmark: bool,
+
+    /// internal: read UEFI settings as root and print JSON to stdout, then exit
+    #[argh(switch)]
+    pub uefi_only: bool,
 }
 
 fn main() {
@@ -79,6 +83,15 @@ fn main() {
 #[instrument]
 fn run() -> Result<i32> {
     let args: Args = argh::from_env();
+
+    if args.uefi_only {
+        let settings = uefi_reader::attempt_uefi_read_with_escalation();
+        let json = serde_json::to_string(&settings).unwrap_or_else(|_| {
+            r#"{"available":false,"unavailable_reason":"JSON serialization failed"}"#.to_string()
+        });
+        println!("{json}");
+        return Ok(EXIT_STABLE);
+    }
 
     validate_platform(cfg!(target_os = "linux"), std::mem::size_of::<usize>())?;
 
