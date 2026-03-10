@@ -45,9 +45,15 @@ pub enum FftPreset {
     /// 36K-248K: L2/L3 cache
     Small,
     /// 426K-8192K: L3 cache and memory
-    Large,
-    /// 8960K-32768K: Memory-focused (default, matches CoreCycler)
+    ///
+    /// Default preset based on extensive research:
+    /// - CoreCycler Issue #14: Large detects errors ~7 min avg vs Huge 15+ min
+    /// - Community consensus (Reddit/overclock.net): 720K and 1344K FFT sizes
+    ///   (both within Large range) are most effective for PBO instability
+    /// - Balances detection speed with thoroughness for AMD Ryzen CPUs
     #[default]
+    Large,
+    /// 8960K-32768K: Memory-focused (former default, matches original CoreCycler)
     Huge,
     /// 1344K-4096K: Balanced cache/memory
     Moderate,
@@ -110,7 +116,7 @@ impl std::fmt::Display for FftPreset {
 /// Generates prime.txt configuration file content for mprime v30.19.
 /// Uses sensible defaults optimized for AMD CPU instability detection:
 /// - SSE mode (lower power = higher boost = better instability detection)
-/// - Huge FFT preset (8960K-32768K, memory-focused)
+/// - Large FFT preset (426K-8192K, fastest PBO instability detection)
 /// - 3 minutes per FFT size (internal mprime timing)
 /// - Single thread (maximizes per-core boost frequency)
 /// - Error checking enabled (catches numerical instability)
