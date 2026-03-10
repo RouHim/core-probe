@@ -1,3 +1,4 @@
+pub mod benchmark;
 pub mod coordinator;
 pub mod cpu_topology;
 pub mod embedded;
