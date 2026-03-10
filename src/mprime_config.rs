@@ -70,6 +70,39 @@ impl FftPreset {
             Self::HeavyShort => (4, 160),
         }
     }
+
+    /// Returns the human-readable name of this preset.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Smallest => "Smallest",
+            Self::Small => "Small",
+            Self::Large => "Large",
+            Self::Huge => "Huge",
+            Self::Moderate => "Moderate",
+            Self::Heavy => "Heavy",
+            Self::HeavyShort => "HeavyShort",
+        }
+    }
+
+    /// Returns a static slice of all 7 FFT presets in order.
+    pub fn all_presets() -> &'static [FftPreset] {
+        &[
+            FftPreset::Smallest,
+            FftPreset::Small,
+            FftPreset::Large,
+            FftPreset::Huge,
+            FftPreset::Moderate,
+            FftPreset::Heavy,
+            FftPreset::HeavyShort,
+        ]
+    }
+}
+
+impl std::fmt::Display for FftPreset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (min, max) = self.fft_range_kb();
+        write!(f, "{} ({}K-{}K)", self.name(), min, max)
+    }
 }
 
 /// Configuration for mprime stress testing.
@@ -649,5 +682,69 @@ mod tests {
             .trim_start_matches("ComputerGUID=")
             .to_string();
         assert_ne!(guid1, guid2, "each config should have a unique GUID");
+    }
+
+    #[test]
+    fn given_fft_preset_large_when_display_then_formats_with_range() {
+        // Given: FftPreset::Large
+        let preset = FftPreset::Large;
+
+        // When: Converting to string
+        let display_str = preset.to_string();
+
+        // Then: Displays as "Large (426K-8192K)"
+        assert_eq!(display_str, "Large (426K-8192K)");
+    }
+
+    #[test]
+    fn given_fft_preset_huge_when_display_then_formats_correctly() {
+        // Given: FftPreset::Huge
+        let preset = FftPreset::Huge;
+
+        // When: Converting to string
+        let display_str = preset.to_string();
+
+        // Then: Displays as "Huge (8960K-32768K)"
+        assert_eq!(display_str, "Huge (8960K-32768K)");
+    }
+
+    #[test]
+    fn given_fft_preset_when_name_called_then_returns_human_readable_name() {
+        // Given: All 7 presets
+        // When: Calling name() on each
+        // Then: Returns correct human-readable names
+        assert_eq!(FftPreset::Smallest.name(), "Smallest");
+        assert_eq!(FftPreset::Small.name(), "Small");
+        assert_eq!(FftPreset::Large.name(), "Large");
+        assert_eq!(FftPreset::Huge.name(), "Huge");
+        assert_eq!(FftPreset::Moderate.name(), "Moderate");
+        assert_eq!(FftPreset::Heavy.name(), "Heavy");
+        assert_eq!(FftPreset::HeavyShort.name(), "HeavyShort");
+    }
+
+    #[test]
+    fn given_all_presets_when_calling_then_returns_7_variants() {
+        // Given: FftPreset::all_presets()
+        let presets = FftPreset::all_presets();
+
+        // When: Checking length
+        // Then: Returns exactly 7 presets
+        assert_eq!(presets.len(), 7);
+    }
+
+    #[test]
+    fn given_all_presets_when_iterating_then_preserves_order() {
+        // Given: FftPreset::all_presets()
+        let presets = FftPreset::all_presets();
+
+        // When: Checking each preset
+        // Then: Order is Smallest, Small, Large, Huge, Moderate, Heavy, HeavyShort
+        assert_eq!(presets[0], FftPreset::Smallest);
+        assert_eq!(presets[1], FftPreset::Small);
+        assert_eq!(presets[2], FftPreset::Large);
+        assert_eq!(presets[3], FftPreset::Huge);
+        assert_eq!(presets[4], FftPreset::Moderate);
+        assert_eq!(presets[5], FftPreset::Heavy);
+        assert_eq!(presets[6], FftPreset::HeavyShort);
     }
 }
