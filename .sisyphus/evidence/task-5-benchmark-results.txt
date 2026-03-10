@@ -1,0 +1,19 @@
+unstable-cpu-detector
+CPU: AMD Ryzen 9 5900X 12-Core Processor
+Config: duration=6m/core iterations=3 mode=sse cores=all quiet=false
+╔════════════════════════════════════════════════════════════════════════════════════════════════════╗
+║                               FFT Preset Benchmark Results — Core 2                                ║
+╠════════════════════════════════════════════════════════════════════════════════════════════════════╣
+║ Rank | Preset     | Range       | Errors Found | Fastest | Average | Slowest                       ║
+║──────┼────────────┼─────────────┼──────────────┼─────────┼─────────┼────────                       ║
+║    1 | Moderate   | 1344K- 4096K |  3/3         |      3s |      3s |      3s                      ║
+║    2 | Large      |  426K- 8192K |  3/3         |      3s |      7s |     12s                      ║
+║    3 | Heavy      |    4K- 1344K |  3/3         |     11s |     15s |     21s                      ║
+║    4 | HeavyShort |    4K-  160K |  3/3         |     14s |     17s |     22s                      ║
+║    5 | Huge       | 8960K-32768K |  3/3         |      5s |     21s |     51s                      ║
+║    6 | Small      |   36K-  248K |  3/3         |      8s |     52s |  1m 39s                      ║
+║    7 | Smallest   |    4K-   21K |  3/3         |     23s |  1m 23s |  2m 36s                      ║
+╠════════════════════════════════════════════════════════════════════════════════════════════════════╣
+║ Winner: Moderate (fastest average time-to-first-error)                                             ║
+║ Total benchmark duration: 9m 58s                                                                   ║
+╚════════════════════════════════════════════════════════════════════════════════════════════════════╝

@@ -45,17 +45,18 @@ pub enum FftPreset {
     /// 36K-248K: L2/L3 cache
     Small,
     /// 426K-8192K: L3 cache and memory
-    ///
-    /// Default preset based on extensive research:
-    /// - CoreCycler Issue #14: Large detects errors ~7 min avg vs Huge 15+ min
-    /// - Community consensus (Reddit/overclock.net): 720K and 1344K FFT sizes
-    ///   (both within Large range) are most effective for PBO instability
-    /// - Balances detection speed with thoroughness for AMD Ryzen CPUs
-    #[default]
     Large,
     /// 8960K-32768K: Memory-focused (former default, matches original CoreCycler)
     Huge,
     /// 1344K-4096K: Balanced cache/memory
+    ///
+    /// Default preset based on empirical benchmark results:
+    /// - Ryzen 9 5900X with PBO: Moderate detects errors fastest (avg 3s vs Large 7s, Huge 21s)
+    /// - CoreCycler Issue #14: 1344K FFT size (upper bound of Moderate range) is the
+    ///   "killer" size for PBO instability detection
+    /// - Focused range targets the sweet spot between L3 cache and memory pressure
+    /// - All 3 benchmark iterations detected errors within 3-3s (highly consistent)
+    #[default]
     Moderate,
     /// 4K-1344K: Full cache hierarchy
     Heavy,
@@ -116,7 +117,7 @@ impl std::fmt::Display for FftPreset {
 /// Generates prime.txt configuration file content for mprime v30.19.
 /// Uses sensible defaults optimized for AMD CPU instability detection:
 /// - SSE mode (lower power = higher boost = better instability detection)
-/// - Large FFT preset (426K-8192K, fastest PBO instability detection)
+/// - Moderate FFT preset (1344K-4096K, fastest PBO instability detection)
 /// - 3 minutes per FFT size (internal mprime timing)
 /// - Single thread (maximizes per-core boost frequency)
 /// - Error checking enabled (catches numerical instability)
@@ -125,7 +126,7 @@ impl std::fmt::Display for FftPreset {
 pub struct MprimeConfig {
     /// CPU instruction set mode (default: SSE)
     mode: StressTestMode,
-    /// FFT size preset (default: Huge)
+    /// FFT size preset (default: Moderate)
     fft_preset: FftPreset,
     /// Minutes to run each FFT size (default: 3)
     torture_time: u32,
@@ -149,7 +150,7 @@ impl Default for MprimeConfig {
     fn default() -> Self {
         Self {
             mode: StressTestMode::SSE,
-            fft_preset: FftPreset::Huge,
+            fft_preset: FftPreset::default(),
             torture_time: 3,
             memory: 0,
             threads: 1,
@@ -596,21 +597,21 @@ mod tests {
         );
     }
     #[test]
-    fn given_default_config_when_generating_then_uses_huge_fft_range() {
+    fn given_default_config_when_generating_then_uses_moderate_fft_range() {
         // Given: default configuration (no explicit FFT preset set)
         let config = MprimeConfig::builder();
 
         // When: Generating configuration
         let result = config.generate().expect("should generate config");
 
-        // Then: Default uses Huge FFT range (CoreCycler default for PBO instability detection)
+        // Then: Default uses Moderate FFT range (benchmark-proven fastest for PBO detection)
         assert!(
-            result.contains("MinTortureFFT=8960"),
-            "default should use Huge FFT min"
+            result.contains("MinTortureFFT=1344"),
+            "default should use Moderate FFT min"
         );
         assert!(
-            result.contains("MaxTortureFFT=32768"),
-            "default should use Huge FFT max"
+            result.contains("MaxTortureFFT=4096"),
+            "default should use Moderate FFT max"
         );
     }
 
