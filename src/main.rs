@@ -8,6 +8,7 @@ pub mod mprime_config;
 pub mod mprime_runner;
 pub mod report;
 pub mod signal_handler;
+pub mod uefi_reader;
 
 use std::collections::BTreeSet;
 use std::fs;
