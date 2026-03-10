@@ -54,6 +54,10 @@ struct Args {
     /// stress test mode: sse, avx, avx2 (default: sse)
     #[argh(option, short = 'm', default = "String::from(\"sse\")")]
     mode: String,
+
+    /// run FFT preset benchmark to find fastest instability detection preset
+    #[argh(switch)]
+    benchmark: bool,
 }
 
 fn main() {
@@ -88,6 +92,12 @@ fn run() -> Result<i32> {
 
     let extracted = ExtractedBinaries::extract().context("failed to extract embedded binaries")?;
     signal_handler::register_handler().context("failed to register signal handler")?;
+
+    if args.benchmark {
+        let report = benchmark::run_benchmark(&topology, &extracted).context("benchmark failed")?;
+        println!("{report}");
+        return Ok(EXIT_STABLE);
+    }
 
     let cleanup = Cleanup::new();
     {
