@@ -50,8 +50,13 @@ impl MprimeRunner {
         self.child.as_ref().map(Child::id)
     }
 
-    #[instrument(skip(self, working_dir), fields(core_id, working_dir = %working_dir.display()))]
-    pub fn start(&mut self, core_id: u32, working_dir: &Path) -> Result<()> {
+    #[instrument(skip(self, working_dir, config), fields(core_id, working_dir = %working_dir.display()))]
+    pub fn start(
+        &mut self,
+        core_id: u32,
+        working_dir: &Path,
+        config: Option<&MprimeConfig>,
+    ) -> Result<()> {
         if self.child.is_some() {
             bail!("mprime process is already running");
         }
@@ -69,9 +74,12 @@ impl MprimeRunner {
             )
         })?;
 
-        let prime_config = MprimeConfig::builder()
-            .disable_internal_affinity()
-            .generate()?;
+        let prime_config = match config {
+            Some(cfg) => cfg.clone().generate()?,
+            None => MprimeConfig::builder()
+                .disable_internal_affinity()
+                .generate()?,
+        };
         let prime_txt_path = working_dir.join("prime.txt");
         fs::write(&prime_txt_path, prime_config).with_context(|| {
             format!(
@@ -311,7 +319,7 @@ mod tests {
         let mut runner = fixture.runner_for_real_mprime();
         let work_dir = fixture.unique_working_dir("spawn-success");
 
-        runner.start(0, &work_dir)?;
+        runner.start(0, &work_dir, None)?;
         let running = runner.is_running()?;
 
         assert!(running, "mprime should be running after successful start");
@@ -327,7 +335,7 @@ mod tests {
         let mut runner = fixture.runner_for_real_mprime();
         let work_dir = fixture.unique_working_dir("stop-terminates");
 
-        runner.start(0, &work_dir)?;
+        runner.start(0, &work_dir, None)?;
         runner.stop()?;
 
         assert!(
@@ -345,7 +353,7 @@ mod tests {
         let mut runner = fixture.runner_for_real_mprime();
         let work_dir = fixture.unique_working_dir("cpu-pinning");
 
-        runner.start(0, &work_dir)?;
+        runner.start(0, &work_dir, None)?;
         let pid = runner
             .process_id()
             .context("runner should expose a pid after start")?;
@@ -368,7 +376,7 @@ mod tests {
         let mut runner = fixture.runner_for_real_mprime();
         let work_dir = fixture.unique_working_dir("isolated-workdir");
 
-        runner.start(0, &work_dir)?;
+        runner.start(0, &work_dir, None)?;
 
         let prime_txt = work_dir.join("prime.txt");
         assert!(
@@ -406,7 +414,7 @@ mod tests {
         let mut runner = fixture.runner_for_crashing_process();
         let work_dir = fixture.unique_working_dir("crash-detection");
 
-        runner.start(0, &work_dir)?;
+        runner.start(0, &work_dir, None)?;
         runner.wait_for(Duration::from_secs(2))?;
 
         assert!(
@@ -562,7 +570,7 @@ mod tests {
         let work_dir = fixture.unique_working_dir("affinity-config");
 
         // When: Starting mprime on core 0
-        runner.start(0, &work_dir)?;
+        runner.start(0, &work_dir, None)?;
 
         // Then: prime.txt contains EnableSetAffinity=0 and NumCores=1
         let prime_txt_content = fs::read_to_string(work_dir.join("prime.txt"))
@@ -596,7 +604,7 @@ mod tests {
         let work_dir = fixture.unique_working_dir("thread-pinning");
 
         // When: mprime is started, given time to spawn worker threads, then re-pinned
-        runner.start(0, &work_dir)?;
+        runner.start(0, &work_dir, None)?;
         std::thread::sleep(Duration::from_secs(3));
         runner.pin_all_threads(fixture.logical_cpu_id)?;
 

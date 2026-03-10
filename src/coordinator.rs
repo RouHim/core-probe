@@ -12,6 +12,7 @@ use crate::cpu_topology::CpuTopology;
 use crate::embedded::ExtractedBinaries;
 use crate::error_parser::{ErrorParser, MprimeError, MprimeErrorType};
 use crate::mce_monitor::{MceError, MceMonitor};
+use crate::mprime_config::MprimeConfig;
 use crate::mprime_runner::MprimeRunner;
 use crate::signal_handler;
 
@@ -56,15 +57,25 @@ pub struct Coordinator {
 }
 
 trait RunnerControl {
-    fn start(&mut self, core_id: u32, working_dir: &Path) -> Result<()>;
+    fn start(
+        &mut self,
+        core_id: u32,
+        working_dir: &Path,
+        config: Option<&MprimeConfig>,
+    ) -> Result<()>;
     fn stop(&mut self) -> Result<()>;
     fn is_running(&mut self) -> Result<bool>;
     fn pin_all_threads(&self, logical_cpu_id: u32) -> Result<u32>;
 }
 
 impl RunnerControl for MprimeRunner {
-    fn start(&mut self, core_id: u32, working_dir: &Path) -> Result<()> {
-        MprimeRunner::start(self, core_id, working_dir)
+    fn start(
+        &mut self,
+        core_id: u32,
+        working_dir: &Path,
+        config: Option<&MprimeConfig>,
+    ) -> Result<()> {
+        self.start(core_id, working_dir, config)
     }
 
     fn stop(&mut self) -> Result<()> {
@@ -311,7 +322,7 @@ impl Coordinator {
             let _ = std::io::stdout().flush();
         }
         runner
-            .start(core_id, &working_dir)
+            .start(core_id, &working_dir, None)
             .with_context(|| format!("failed to start mprime on physical core {core_id}"))?;
 
         // Wait for mprime to spawn worker threads, then pin all threads to the target CPU.
@@ -948,7 +959,12 @@ mod tests {
     }
 
     impl RunnerControl for FakeRunner {
-        fn start(&mut self, core_id: u32, _working_dir: &Path) -> Result<()> {
+        fn start(
+            &mut self,
+            core_id: u32,
+            _working_dir: &Path,
+            _config: Option<&MprimeConfig>,
+        ) -> Result<()> {
             self.start_order.push(core_id);
             self.running = true;
             Ok(())
