@@ -12,6 +12,7 @@ pub mod uefi_reader;
 
 use std::collections::BTreeSet;
 use std::fs;
+use std::io::IsTerminal;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -97,12 +98,42 @@ fn run() -> Result<i32> {
 
     let topology = detect_cpu_topology().context("failed to detect CPU topology")?;
     validate_amd_vendor(&topology)?;
+    info!(
+        cpu_model = %topology.model_name,
+        vendor = %topology.vendor,
+        physical_cores = topology.physical_core_count,
+        logical_cpus = topology.logical_cpu_count,
+        "CPU topology detected"
+    );
+    let uefi_settings = if should_attempt_startup_uefi_read(
+        nix::unistd::getuid().is_root(),
+        std::io::stdin().is_terminal(),
+        std::io::stdout().is_terminal(),
+    ) {
+        uefi_reader::attempt_uefi_read_with_escalation()
+    } else {
+        uefi_reader::UefiSettings::unavailable(
+            "requires interactive root escalation or --uefi-only",
+        )
+    };
+    if let Some(pbo) = &uefi_settings.pbo_status {
+        info!(pbo_status = %pbo, "UEFI PBO status detected");
+    }
+    if !uefi_settings.available {
+        info!(reason = ?uefi_settings.unavailable_reason, "UEFI settings unavailable — report will not include BIOS settings");
+    }
     warn_if_root();
     check_temp_dir_writable().context("temporary directory pre-flight check failed")?;
 
     let core_filter = parse_core_filter(args.cores.as_deref(), &topology)?;
     let mode = parse_stress_mode(&args.mode)?;
-    print_startup_banner(&topology, &args, mode, core_filter.as_deref());
+    print_startup_banner(
+        &topology,
+        &args,
+        mode,
+        core_filter.as_deref(),
+        Some(&uefi_settings),
+    );
 
     let extracted = ExtractedBinaries::extract().context("failed to extract embedded binaries")?;
     signal_handler::register_handler().context("failed to register signal handler")?;
@@ -121,7 +152,8 @@ fn run() -> Result<i32> {
         guard.register_temp_dir(extracted.temp_dir.clone());
     }
 
-    let run_result = run_coordinator_and_report(&args, &topology, &extracted, core_filter);
+    let run_result =
+        run_coordinator_and_report(&args, &topology, &extracted, core_filter, &uefi_settings);
     let cleanup_result = {
         let mut guard = cleanup
             .lock()
@@ -134,12 +166,13 @@ fn run() -> Result<i32> {
     Ok(exit_code)
 }
 
-#[instrument(skip(args, topology, extracted, core_filter))]
+#[instrument(skip(args, topology, extracted, core_filter, uefi_settings))]
 fn run_coordinator_and_report(
     args: &Args,
     topology: &CpuTopology,
     extracted: &ExtractedBinaries,
     core_filter: Option<Vec<u32>>,
+    uefi_settings: &uefi_reader::UefiSettings,
 ) -> Result<i32> {
     let duration_per_core = parse_duration(&args.duration).context("invalid --duration value")?;
     let coordinator = Coordinator::new(
@@ -153,7 +186,7 @@ fn run_coordinator_and_report(
         .run(topology, extracted)
         .context("coordinator run failed")?;
 
-    let report = StabilityReport::new(&results, topology, None)
+    let report = StabilityReport::new(&results, topology, Some(uefi_settings))
         .with_quiet(args.quiet)
         .generate()
         .context("failed to generate stability report")?;
@@ -198,6 +231,14 @@ fn warn_if_root() {
     if nix::unistd::getuid().is_root() {
         warn!("running as root is not required for this tool");
     }
+}
+
+fn should_attempt_startup_uefi_read(
+    is_root: bool,
+    stdin_is_terminal: bool,
+    stdout_is_terminal: bool,
+) -> bool {
+    is_root || (stdin_is_terminal && stdout_is_terminal)
 }
 
 fn check_temp_dir_writable() -> Result<()> {
@@ -383,6 +424,7 @@ fn print_startup_banner(
     args: &Args,
     mode: StressTestMode,
     core_filter: Option<&[u32]>,
+    uefi_settings: Option<&uefi_reader::UefiSettings>,
 ) {
     let mode_name = match mode {
         StressTestMode::SSE => "sse",
@@ -416,10 +458,28 @@ fn print_startup_banner(
     if !args.quiet {
         println!("unstable-cpu-detector");
         println!("CPU: {}", topology.model_name);
+        println!("{}", format_uefi_status_line(uefi_settings));
         println!(
             "Config: duration={}/core iterations={} mode={} cores={} quiet={}",
             args.duration, args.iterations, mode_name, selected_cores, args.quiet
         );
+    }
+}
+
+fn format_uefi_status_line(uefi_settings: Option<&uefi_reader::UefiSettings>) -> String {
+    match uefi_settings {
+        Some(settings) if settings.available => match settings.pbo_status.as_deref() {
+            Some(pbo_status) => format!("UEFI Settings: Available (PBO: {pbo_status})"),
+            None => "UEFI Settings: Available".to_string(),
+        },
+        Some(settings) => format!(
+            "UEFI Settings: Unavailable ({})",
+            settings
+                .unavailable_reason
+                .as_deref()
+                .unwrap_or("unknown reason")
+        ),
+        None => "UEFI Settings: Not checked".to_string(),
     }
 }
 
@@ -439,6 +499,41 @@ mod tests {
             cpu_brand: None,
             cpu_frequency_mhz: None,
         }
+    }
+
+    #[test]
+    fn given_available_uefi_settings_when_formatting_status_line_then_includes_pbo_status() {
+        let settings = uefi_reader::UefiSettings {
+            available: true,
+            pbo_status: Some("Enabled".to_string()),
+            ..Default::default()
+        };
+
+        let line = format_uefi_status_line(Some(&settings));
+
+        assert_eq!(line, "UEFI Settings: Available (PBO: Enabled)");
+    }
+
+    #[test]
+    fn given_unavailable_uefi_settings_when_formatting_status_line_then_includes_reason() {
+        let settings = uefi_reader::UefiSettings::unavailable("requires root");
+
+        let line = format_uefi_status_line(Some(&settings));
+
+        assert_eq!(line, "UEFI Settings: Unavailable (requires root)");
+    }
+
+    #[test]
+    fn given_non_interactive_non_root_startup_when_checking_then_skips_uefi_escalation() {
+        assert!(!should_attempt_startup_uefi_read(false, false, false));
+        assert!(!should_attempt_startup_uefi_read(false, true, false));
+        assert!(!should_attempt_startup_uefi_read(false, false, true));
+    }
+
+    #[test]
+    fn given_root_or_interactive_startup_when_checking_then_allows_uefi_escalation() {
+        assert!(should_attempt_startup_uefi_read(true, false, false));
+        assert!(should_attempt_startup_uefi_read(false, true, true));
     }
 
     #[test]
