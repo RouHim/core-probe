@@ -549,8 +549,8 @@ fn visible_len(text: &str) -> usize {
 
 fn co_offset_label(offset: i32, is_failed: bool) -> (&'static str, bool) {
     match offset {
-        i32::MIN..=-20 => ("aggressive", is_failed),
-        -19..=-10 => ("moderate", false),
+        i32::MIN..=-21 => ("aggressive", is_failed),
+        -20..=-10 => ("moderate", false),
         -9..=-1 => ("conservative", false),
         0 => ("stock", false),
         _ => ("positive", is_failed),
