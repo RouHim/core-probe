@@ -43,12 +43,12 @@ pub struct StabilityReport<'a> {
 /// Used internally for deduplication before report generation.
 struct AggregatedCoreResult {
     core_id: u32,
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[allow(dead_code)]
     logical_cpu_ids: Vec<u32>,
     worst_status: CoreStatus,
     all_mprime_errors: Vec<MprimeError>,
     all_mce_errors: Vec<MceError>,
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[allow(dead_code)]
     total_iterations: u32,
 }
 
