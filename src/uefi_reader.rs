@@ -678,12 +678,8 @@ mod tests {
 
         // THEN: Unavailable notice present, full report structure intact
         assert!(
-            output.contains("⚠ UEFI Settings: Unavailable"),
-            "should contain unavailable notice"
-        );
-        assert!(
-            output.contains("Run as root for UEFI/BIOS settings in report"),
-            "should contain root hint"
+            output.contains("PBO: ⚠ unavailable (run as root)"),
+            "should contain new unavailable notice in header"
         );
         assert!(output.contains("RESULT:"), "should contain RESULT line");
         assert!(
@@ -698,7 +694,7 @@ mod tests {
     }
 
     #[test]
-    fn given_full_uefi_data_when_generating_report_then_shows_uefi_section_and_co_annotations() {
+    fn given_full_uefi_data_when_generating_report_then_shows_header_uefi_and_co_annotations() {
         // GIVEN: Full UEFI data with PBO, CO for 2 cores, AGESA
         let uefi = UefiSettings {
             available: true,
@@ -743,20 +739,12 @@ mod tests {
 
         // THEN: UEFI section present with PBO + AGESA
         assert!(
-            output.contains("UEFI/BIOS Settings"),
-            "should show UEFI section"
-        );
-        assert!(
             output.contains("PBO Status: Enabled"),
             "should show PBO status"
         );
         assert!(
             output.contains("AGESA Version: 1.2.0.7"),
             "should show AGESA version"
-        );
-        assert!(
-            output.contains("Curve Optimizer Offsets:"),
-            "should show CO section header"
         );
 
         // CO annotation on failed core 0 (aggressive, -25)
@@ -844,10 +832,6 @@ mod tests {
         assert!(
             !output.contains("CO offset:"),
             "should NOT show per-core CO annotation"
-        );
-        assert!(
-            output.contains("UEFI/BIOS Settings"),
-            "should show UEFI section title"
         );
     }
 }
