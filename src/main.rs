@@ -12,7 +12,6 @@ pub mod uefi_reader;
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::io::IsTerminal;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -105,17 +104,7 @@ fn run() -> Result<i32> {
         logical_cpus = topology.logical_cpu_count,
         "CPU topology detected"
     );
-    let uefi_settings = if should_attempt_startup_uefi_read(
-        nix::unistd::getuid().is_root(),
-        std::io::stdin().is_terminal(),
-        std::io::stdout().is_terminal(),
-    ) {
-        uefi_reader::attempt_uefi_read_with_escalation()
-    } else {
-        uefi_reader::UefiSettings::unavailable(
-            "requires interactive root escalation or --uefi-only",
-        )
-    };
+    let uefi_settings = uefi_reader::attempt_uefi_read_with_escalation();
     if let Some(pbo) = &uefi_settings.pbo_status {
         info!(pbo_status = %pbo, "UEFI PBO status detected");
     }
@@ -231,14 +220,6 @@ fn warn_if_root() {
     if nix::unistd::getuid().is_root() {
         warn!("running as root is not required for this tool");
     }
-}
-
-fn should_attempt_startup_uefi_read(
-    is_root: bool,
-    stdin_is_terminal: bool,
-    stdout_is_terminal: bool,
-) -> bool {
-    is_root || (stdin_is_terminal && stdout_is_terminal)
 }
 
 fn check_temp_dir_writable() -> Result<()> {
@@ -521,19 +502,6 @@ mod tests {
         let line = format_uefi_status_line(Some(&settings));
 
         assert_eq!(line, "UEFI Settings: Unavailable (requires root)");
-    }
-
-    #[test]
-    fn given_non_interactive_non_root_startup_when_checking_then_skips_uefi_escalation() {
-        assert!(!should_attempt_startup_uefi_read(false, false, false));
-        assert!(!should_attempt_startup_uefi_read(false, true, false));
-        assert!(!should_attempt_startup_uefi_read(false, false, true));
-    }
-
-    #[test]
-    fn given_root_or_interactive_startup_when_checking_then_allows_uefi_escalation() {
-        assert!(should_attempt_startup_uefi_read(true, false, false));
-        assert!(should_attempt_startup_uefi_read(false, true, true));
     }
 
     #[test]

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::io::IsTerminal;
 use uefisettings_backend_thrift::Question;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -257,7 +258,13 @@ pub fn attempt_uefi_read_with_escalation() -> UefiSettings {
     match method {
         EscalationMethod::AlreadyRoot => read_uefi_settings_as_root()
             .unwrap_or_else(|e| UefiSettings::unavailable(format!("UEFI reading failed: {e}"))),
-        EscalationMethod::Pkexec => run_as_pkexec(),
+        EscalationMethod::Pkexec => {
+            if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+                run_as_pkexec()
+            } else {
+                UefiSettings::unavailable("requires interactive root escalation or --uefi-only")
+            }
+        }
         EscalationMethod::Unavailable { reason } => UefiSettings::unavailable(reason),
     }
 }
