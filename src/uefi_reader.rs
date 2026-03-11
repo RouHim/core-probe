@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use uefisettings_backend_thrift::Question;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EscalationMethod {
@@ -51,13 +52,203 @@ pub struct UefiSettings {
     pub raw_settings: Vec<(String, String)>,
 }
 
+fn matches_pbo(name: &str, help: &str) -> bool {
+    let combined = format!("{name} {help}").to_lowercase();
+    combined.contains("precision boost")
+        || combined.contains("pbo")
+        || combined.contains("core performance boost")
+        || combined.contains("cpb")
+}
+
+fn matches_co(name: &str, help: &str) -> bool {
+    let combined = format!("{name} {help}").to_lowercase();
+    combined.contains("curve optimizer")
+        || combined.contains("co offset")
+        || combined.contains("per core")
+}
+
+fn matches_limits(name: &str, help: &str) -> bool {
+    let combined = format!("{name} {help}").to_lowercase();
+    combined.contains("ppt")
+        || combined.contains("tdc")
+        || combined.contains("edc")
+        || combined.contains("power limit")
+}
+
+fn matches_agesa(name: &str, help: &str) -> bool {
+    let combined = format!("{name} {help}").to_lowercase();
+    combined.contains("agesa")
+}
+
+fn matches_cbs(name: &str, help: &str) -> bool {
+    let combined = format!("{name} {help}").to_lowercase();
+    combined.contains("cbs") || combined.contains("amd overclocking")
+}
+
+fn matches_any_amd(name: &str, help: &str) -> bool {
+    matches_pbo(name, help)
+        || matches_co(name, help)
+        || matches_limits(name, help)
+        || matches_agesa(name, help)
+        || matches_cbs(name, help)
+}
+
+/// Extract a core ID from a question name by finding digits near "core" keyword.
+/// E.g. "Core 0 Curve Optimizer" → Some(0), "Per Core CO Offset 12" → Some(12)
+fn extract_core_id(name: &str) -> Option<u32> {
+    let lower = name.to_lowercase();
+    if !lower.contains("core") {
+        return None;
+    }
+    let mut num_str = String::new();
+    let mut found_digits = false;
+    for ch in name.chars() {
+        if ch.is_ascii_digit() {
+            num_str.push(ch);
+            found_digits = true;
+        } else if found_digits {
+            break;
+        }
+    }
+    if found_digits {
+        num_str.parse::<u32>().ok()
+    } else {
+        None
+    }
+}
+
+/// Parse HII questions into structured UefiSettings.
+/// This is the testable core of HII database interpretation.
+pub fn parse_hii_questions(questions: &[Question]) -> UefiSettings {
+    let mut pbo_status: Option<String> = None;
+    let mut ppt_limit: Option<String> = None;
+    let mut tdc_limit: Option<String> = None;
+    let mut edc_limit: Option<String> = None;
+    let mut co_offsets: BTreeMap<u32, i32> = BTreeMap::new();
+    let mut agesa_version: Option<String> = None;
+    let mut raw_settings: Vec<(String, String)> = Vec::new();
+
+    for q in questions {
+        let name = &q.name;
+        let help = &q.help;
+        let answer = &q.answer;
+
+        if matches_any_amd(name, help) {
+            raw_settings.push((name.clone(), answer.clone()));
+            tracing::info!(name = %name, answer = %answer, "matched AMD setting");
+        } else {
+            let combined = format!("{name} {help}").to_lowercase();
+            if combined.contains("amd") || combined.contains("ryzen") {
+                tracing::debug!(name = %name, answer = %answer, "unmatched AMD-looking setting");
+            }
+            continue;
+        }
+
+        if pbo_status.is_none() && matches_pbo(name, help) {
+            let name_lower = name.to_lowercase();
+            let is_pbo_main = name_lower.contains("precision boost")
+                || name_lower.contains("pbo")
+                || name_lower.contains("core performance boost")
+                || name_lower.contains("cpb");
+            let is_co = matches_co(name, help) && extract_core_id(name).is_some();
+            if is_pbo_main && !is_co {
+                pbo_status = Some(answer.clone());
+            }
+        }
+
+        if matches_limits(name, help) {
+            let name_lower = name.to_lowercase();
+            if name_lower.contains("ppt") && ppt_limit.is_none() {
+                ppt_limit = Some(answer.clone());
+            }
+            if name_lower.contains("tdc") && tdc_limit.is_none() {
+                tdc_limit = Some(answer.clone());
+            }
+            if name_lower.contains("edc") && edc_limit.is_none() {
+                edc_limit = Some(answer.clone());
+            }
+        }
+
+        if matches_co(name, help) {
+            if let Some(core_id) = extract_core_id(name) {
+                if let Ok(offset) = answer.parse::<i32>() {
+                    co_offsets.insert(core_id, offset);
+                }
+            }
+        }
+
+        if agesa_version.is_none() && matches_agesa(name, help) {
+            agesa_version = Some(answer.clone());
+        }
+    }
+
+    let has_limits = ppt_limit.is_some() || tdc_limit.is_some() || edc_limit.is_some();
+    let pbo_limits = if has_limits {
+        Some(PboLimits {
+            ppt_limit,
+            tdc_limit,
+            edc_limit,
+        })
+    } else {
+        None
+    };
+
+    let co_map = if co_offsets.is_empty() {
+        None
+    } else {
+        Some(co_offsets)
+    };
+
+    let available = !raw_settings.is_empty();
+
+    tracing::info!(
+        available = available,
+        pbo_status = ?pbo_status,
+        agesa_version = ?agesa_version,
+        co_cores = co_map.as_ref().map(|m| m.len()).unwrap_or(0),
+        raw_count = raw_settings.len(),
+        "UEFI settings parsed"
+    );
+
+    UefiSettings {
+        available,
+        unavailable_reason: None,
+        pbo_status,
+        pbo_limits,
+        curve_optimizer_offsets: co_map,
+        agesa_version,
+        raw_settings,
+    }
+}
+
+/// Read UEFI settings by extracting the HII database (requires root).
+pub fn read_uefi_settings_as_root() -> anyhow::Result<UefiSettings> {
+    use uefisettings::exports::{identify_machine, HiiBackend};
+
+    let machine_info = identify_machine();
+    tracing::info!(
+        bios_vendor = %machine_info.bios_vendor,
+        bios_version = %machine_info.bios_version,
+        product_name = %machine_info.product_name,
+        "UEFI machine identified"
+    );
+
+    let hii_db = HiiBackend::extract_db()
+        .map_err(|e| anyhow::anyhow!("Failed to extract HII database: {}", e))?;
+
+    let questions = HiiBackend::list_questions(&hii_db.db)
+        .map_err(|e| anyhow::anyhow!("Failed to list HII questions: {}", e))?;
+
+    tracing::info!(question_count = questions.len(), "HII questions loaded");
+
+    Ok(parse_hii_questions(&questions))
+}
+
 pub fn attempt_uefi_read_with_escalation() -> UefiSettings {
     let method = detect_escalation_method(is_current_user_root(), pkexec_available());
     match method {
-        EscalationMethod::AlreadyRoot => {
-            // Task 3 will replace this placeholder
-            UefiSettings::unavailable("UEFI reading not yet implemented for root path")
-        }
+        EscalationMethod::AlreadyRoot => read_uefi_settings_as_root()
+            .unwrap_or_else(|e| UefiSettings::unavailable(format!("UEFI reading failed: {e}"))),
         EscalationMethod::Pkexec => run_as_pkexec(),
         EscalationMethod::Unavailable { reason } => UefiSettings::unavailable(reason),
     }
@@ -148,6 +339,56 @@ impl UefiSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uefisettings_backend_thrift::Question;
+
+    fn build_question(name: &str, answer: &str, help: &str) -> Question {
+        Question {
+            name: name.to_string(),
+            answer: answer.to_string(),
+            help: help.to_string(),
+            options: Vec::new(),
+            ..Default::default()
+        }
+    }
+
+    fn build_test_questions() -> Vec<Question> {
+        vec![
+            build_question(
+                "Precision Boost Overdrive",
+                "Enabled",
+                "PBO control setting",
+            ),
+            build_question("PPT Limit", "142", "Platform Power Throttle limit in watts"),
+            build_question("TDC Limit", "95", "Thermal Design Current limit in amps"),
+            build_question(
+                "EDC Limit",
+                "140",
+                "Electrical Design Current limit in amps",
+            ),
+            build_question(
+                "Core 0 Curve Optimizer Offset",
+                "-15",
+                "Per core curve optimizer offset",
+            ),
+            build_question(
+                "Core 1 Curve Optimizer Offset",
+                "-10",
+                "Per core curve optimizer offset",
+            ),
+            build_question(
+                "Core 5 Curve Optimizer Offset",
+                "-20",
+                "Per core curve optimizer offset",
+            ),
+            build_question("AGESA Version", "1.2.0.7", "AGESA firmware version string"),
+            build_question("CBS Debug Options", "Auto", "AMD CBS debug configuration"),
+            build_question(
+                "Boot Option #1",
+                "UEFI OS",
+                "First boot device in boot order",
+            ),
+        ]
+    }
 
     #[test]
     fn given_unavailable_reason_when_creating_then_stores_reason() {
@@ -226,5 +467,364 @@ mod tests {
             .as_deref()
             .unwrap_or("")
             .contains("pkexec escalation failed"));
+    }
+
+    #[test]
+    fn given_hii_questions_with_pbo_enabled_when_parsing_then_extracts_pbo_status() {
+        let questions = build_test_questions();
+
+        let settings = parse_hii_questions(&questions);
+
+        assert!(settings.available);
+        assert_eq!(settings.pbo_status, Some("Enabled".to_string()));
+    }
+
+    #[test]
+    fn given_hii_questions_with_co_offsets_when_parsing_then_populates_btreemap() {
+        let questions = build_test_questions();
+
+        let settings = parse_hii_questions(&questions);
+
+        let co = settings
+            .curve_optimizer_offsets
+            .expect("CO offsets should be populated");
+        assert_eq!(co.len(), 3);
+        assert_eq!(co[&0], -15);
+        assert_eq!(co[&1], -10);
+        assert_eq!(co[&5], -20);
+    }
+
+    #[test]
+    fn given_hii_questions_with_agesa_when_parsing_then_extracts_version() {
+        let questions = build_test_questions();
+
+        let settings = parse_hii_questions(&questions);
+
+        assert_eq!(settings.agesa_version, Some("1.2.0.7".to_string()));
+    }
+
+    #[test]
+    fn given_hii_questions_with_no_amd_settings_when_parsing_then_returns_empty_raw() {
+        let questions = vec![
+            build_question("Boot Option #1", "UEFI OS", "First boot device"),
+            build_question("Secure Boot", "Enabled", "Enable secure boot"),
+            build_question("CSM Support", "Disabled", "Compatibility support module"),
+        ];
+
+        let settings = parse_hii_questions(&questions);
+
+        assert!(!settings.available);
+        assert!(settings.raw_settings.is_empty());
+        assert!(settings.pbo_status.is_none());
+        assert!(settings.curve_optimizer_offsets.is_none());
+        assert!(settings.agesa_version.is_none());
+    }
+
+    #[test]
+    fn given_extract_db_fails_when_reading_then_returns_unavailable() {
+        let err: anyhow::Result<UefiSettings> = Err(anyhow::anyhow!(
+            "Failed to extract HII database: permission denied"
+        ));
+
+        let settings =
+            err.unwrap_or_else(|e| UefiSettings::unavailable(format!("UEFI reading failed: {e}")));
+
+        assert!(!settings.available);
+        assert!(settings
+            .unavailable_reason
+            .as_deref()
+            .unwrap_or("")
+            .contains("UEFI reading failed"));
+        assert!(settings
+            .unavailable_reason
+            .as_deref()
+            .unwrap_or("")
+            .contains("permission denied"));
+    }
+
+    #[test]
+    fn given_mixed_case_keywords_when_searching_then_matches_case_insensitive() {
+        let questions = vec![
+            build_question(
+                "PRECISION BOOST OVERDRIVE",
+                "Disabled",
+                "PBO control SETTING",
+            ),
+            build_question("cOrE 3 cUrVe OpTiMiZeR", "-5", "per CORE offset adjustment"),
+            build_question("Agesa VERSION", "1.0.0.4", "agesa firmware"),
+            build_question("PPT LIMIT", "200", "power limit"),
+        ];
+
+        let settings = parse_hii_questions(&questions);
+
+        assert!(settings.available);
+        assert_eq!(settings.pbo_status, Some("Disabled".to_string()));
+        assert_eq!(settings.agesa_version, Some("1.0.0.4".to_string()));
+
+        let co = settings
+            .curve_optimizer_offsets
+            .expect("CO offsets should be populated");
+        assert_eq!(co[&3], -5);
+
+        let limits = settings.pbo_limits.expect("limits should exist");
+        assert_eq!(limits.ppt_limit, Some("200".to_string()));
+    }
+
+    #[test]
+    fn given_hii_questions_with_pbo_limits_when_parsing_then_extracts_all_three() {
+        let questions = build_test_questions();
+
+        let settings = parse_hii_questions(&questions);
+
+        let limits = settings.pbo_limits.expect("PBO limits should be populated");
+        assert_eq!(limits.ppt_limit, Some("142".to_string()));
+        assert_eq!(limits.tdc_limit, Some("95".to_string()));
+        assert_eq!(limits.edc_limit, Some("140".to_string()));
+    }
+
+    #[test]
+    fn given_hii_questions_with_cbs_when_parsing_then_includes_in_raw() {
+        let questions = vec![build_question(
+            "CBS Debug Options",
+            "Auto",
+            "AMD CBS debug configuration",
+        )];
+
+        let settings = parse_hii_questions(&questions);
+
+        assert!(settings.available);
+        assert!(settings
+            .raw_settings
+            .iter()
+            .any(|(name, _)| name == "CBS Debug Options"));
+    }
+
+    #[test]
+    fn given_core_name_with_digits_when_extracting_id_then_parses_correctly() {
+        assert_eq!(extract_core_id("Core 0 Curve Optimizer"), Some(0));
+        assert_eq!(extract_core_id("Core 12 CO Offset"), Some(12));
+        assert_eq!(extract_core_id("Per Core 5 Setting"), Some(5));
+        assert_eq!(extract_core_id("No digits here core"), None);
+        assert_eq!(extract_core_id("PPT Limit 200"), None);
+    }
+
+    // ── Integration / pipeline tests ──
+
+    use crate::coordinator::{CoreStatus, CoreTestResult, CycleResults};
+    use crate::cpu_topology::CpuTopology;
+    use crate::report::StabilityReport;
+    use std::time::Duration;
+
+    fn build_test_topology() -> CpuTopology {
+        CpuTopology {
+            vendor: "AuthenticAMD".to_string(),
+            model_name: "AMD Ryzen 9 5900X".to_string(),
+            physical_core_count: 2,
+            logical_cpu_count: 2,
+            core_map: BTreeMap::from([(0, vec![0]), (1, vec![1])]),
+            cpu_brand: None,
+            cpu_frequency_mhz: None,
+        }
+    }
+
+    #[test]
+    fn given_non_root_no_pkexec_when_reading_then_report_shows_unavailable_notice() {
+        // GIVEN: Non-root, no pkexec → unavailable UefiSettings
+        let uefi = UefiSettings::unavailable(
+            "Root access required for UEFI settings. Run with sudo or install polkit (pkexec).",
+        );
+        let topology = build_test_topology();
+        let results = CycleResults {
+            results: vec![CoreTestResult {
+                core_id: 0,
+                logical_cpu_ids: vec![0],
+                status: CoreStatus::Passed,
+                mprime_errors: Vec::new(),
+                mce_errors: Vec::new(),
+                duration_tested: Duration::from_secs(360),
+                iterations_completed: 1,
+            }],
+            total_duration: Duration::from_secs(360),
+            iterations_completed: 1,
+            interrupted: false,
+        };
+
+        // WHEN: Generate full report
+        let report = StabilityReport::new(&results, &topology, Some(&uefi));
+        let output = report.generate().expect("report generation should succeed");
+
+        // THEN: Unavailable notice present, full report structure intact
+        assert!(
+            output.contains("⚠ UEFI Settings: Unavailable"),
+            "should contain unavailable notice"
+        );
+        assert!(
+            output.contains("Run as root for UEFI/BIOS settings in report"),
+            "should contain root hint"
+        );
+        assert!(output.contains("RESULT:"), "should contain RESULT line");
+        assert!(
+            output.contains("CPU Stability Report"),
+            "should contain report header"
+        );
+        assert!(output.contains('╚'), "should contain footer box-drawing");
+        assert!(
+            !output.contains("UEFI/BIOS Settings"),
+            "should NOT contain the available UEFI section title"
+        );
+    }
+
+    #[test]
+    fn given_full_uefi_data_when_generating_report_then_shows_uefi_section_and_co_annotations() {
+        // GIVEN: Full UEFI data with PBO, CO for 2 cores, AGESA
+        let uefi = UefiSettings {
+            available: true,
+            unavailable_reason: None,
+            pbo_status: Some("Enabled".to_string()),
+            pbo_limits: None,
+            curve_optimizer_offsets: Some(BTreeMap::from([(0, -25), (1, -10)])),
+            agesa_version: Some("1.2.0.7".to_string()),
+            raw_settings: vec![("PBO".to_string(), "Enabled".to_string())],
+        };
+        let topology = build_test_topology();
+        // One failed core (0) and one passed core (1)
+        let results = CycleResults {
+            results: vec![
+                CoreTestResult {
+                    core_id: 0,
+                    logical_cpu_ids: vec![0],
+                    status: CoreStatus::Failed,
+                    mprime_errors: Vec::new(),
+                    mce_errors: Vec::new(),
+                    duration_tested: Duration::from_secs(120),
+                    iterations_completed: 1,
+                },
+                CoreTestResult {
+                    core_id: 1,
+                    logical_cpu_ids: vec![1],
+                    status: CoreStatus::Passed,
+                    mprime_errors: Vec::new(),
+                    mce_errors: Vec::new(),
+                    duration_tested: Duration::from_secs(360),
+                    iterations_completed: 1,
+                },
+            ],
+            total_duration: Duration::from_secs(480),
+            iterations_completed: 1,
+            interrupted: false,
+        };
+
+        // WHEN: Generate full report
+        let report = StabilityReport::new(&results, &topology, Some(&uefi));
+        let output = report.generate().expect("report generation should succeed");
+
+        // THEN: UEFI section present with PBO + AGESA
+        assert!(
+            output.contains("UEFI/BIOS Settings"),
+            "should show UEFI section"
+        );
+        assert!(
+            output.contains("PBO Status: Enabled"),
+            "should show PBO status"
+        );
+        assert!(
+            output.contains("AGESA Version: 1.2.0.7"),
+            "should show AGESA version"
+        );
+        assert!(
+            output.contains("Curve Optimizer Offsets:"),
+            "should show CO section header"
+        );
+
+        // CO annotation on failed core 0 (aggressive, -25)
+        assert!(
+            output.contains("CO offset: -25 (aggressive)"),
+            "failed core 0 should have CO annotation"
+        );
+        // CO annotation on passed core 1 (moderate, -10)
+        assert!(
+            output.contains("CO offset: -10 (moderate)"),
+            "passed core 1 should have CO annotation"
+        );
+    }
+
+    #[test]
+    fn given_uefi_settings_when_serializing_then_round_trip_preserves_all_fields() {
+        // GIVEN: Fully populated UefiSettings
+        let original = UefiSettings {
+            available: true,
+            unavailable_reason: None,
+            pbo_status: Some("Enabled".to_string()),
+            pbo_limits: Some(PboLimits {
+                ppt_limit: Some("142".to_string()),
+                tdc_limit: Some("95".to_string()),
+                edc_limit: Some("140".to_string()),
+            }),
+            curve_optimizer_offsets: Some(BTreeMap::from([(0, -15), (1, -10), (5, -20)])),
+            agesa_version: Some("1.2.0.7".to_string()),
+            raw_settings: vec![
+                ("PBO".to_string(), "Enabled".to_string()),
+                ("AGESA".to_string(), "1.2.0.7".to_string()),
+            ],
+        };
+
+        // WHEN: Serialize to JSON and deserialize back
+        let json = serde_json::to_string(&original).expect("serialization should succeed");
+        let deserialized: UefiSettings =
+            serde_json::from_str(&json).expect("deserialization should succeed");
+
+        // THEN: All fields preserved
+        assert_eq!(original, deserialized);
+    }
+
+    #[test]
+    fn given_partial_uefi_data_when_generating_report_then_shows_pbo_without_co_section() {
+        // GIVEN: Partial UEFI — only pbo_status, no CO offsets
+        let uefi = UefiSettings {
+            available: true,
+            unavailable_reason: None,
+            pbo_status: Some("Auto".to_string()),
+            pbo_limits: None,
+            curve_optimizer_offsets: None,
+            agesa_version: None,
+            raw_settings: vec![("PBO".to_string(), "Auto".to_string())],
+        };
+        let topology = build_test_topology();
+        let results = CycleResults {
+            results: vec![CoreTestResult {
+                core_id: 0,
+                logical_cpu_ids: vec![0],
+                status: CoreStatus::Passed,
+                mprime_errors: Vec::new(),
+                mce_errors: Vec::new(),
+                duration_tested: Duration::from_secs(360),
+                iterations_completed: 1,
+            }],
+            total_duration: Duration::from_secs(360),
+            iterations_completed: 1,
+            interrupted: false,
+        };
+
+        // WHEN: Generate full report
+        let report = StabilityReport::new(&results, &topology, Some(&uefi));
+        let output = report.generate().expect("report generation should succeed");
+
+        // THEN: PBO shown but no CO section, no panic
+        assert!(
+            output.contains("PBO Status: Auto"),
+            "should show PBO status"
+        );
+        assert!(
+            !output.contains("Curve Optimizer Offsets:"),
+            "should NOT show CO section header"
+        );
+        assert!(
+            !output.contains("CO offset:"),
+            "should NOT show per-core CO annotation"
+        );
+        assert!(
+            output.contains("UEFI/BIOS Settings"),
+            "should show UEFI section title"
+        );
     }
 }
