@@ -282,11 +282,15 @@ fn run_as_pkexec() -> UefiSettings {
                 let mut stderr_bytes = Vec::new();
                 if let Some(mut out) = child.stdout.take() {
                     use std::io::Read;
-                    let _ = out.read_to_end(&mut stdout);
+                    if let Err(e) = out.read_to_end(&mut stdout) {
+                        tracing::debug!(error = %e, "partial read of pkexec stdout");
+                    }
                 }
                 if let Some(mut err) = child.stderr.take() {
                     use std::io::Read;
-                    let _ = err.read_to_end(&mut stderr_bytes);
+                    if let Err(e) = err.read_to_end(&mut stderr_bytes) {
+                        tracing::debug!(error = %e, "partial read of pkexec stderr");
+                    }
                 }
                 if status.success() {
                     let json_str = String::from_utf8_lossy(&stdout);
@@ -306,8 +310,12 @@ fn run_as_pkexec() -> UefiSettings {
             }
             Ok(None) => {
                 if start.elapsed() >= timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    if let Err(e) = child.kill() {
+                        tracing::debug!(error = %e, "failed to kill timed-out pkexec child");
+                    }
+                    if let Err(e) = child.wait() {
+                        tracing::debug!(error = %e, "failed to wait for timed-out pkexec child");
+                    }
                     return UefiSettings::unavailable(
                         "pkexec escalation timed out after 10 seconds (no polkit agent running?)"
                             .to_string(),
