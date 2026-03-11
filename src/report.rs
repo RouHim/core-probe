@@ -41,13 +41,14 @@ pub struct StabilityReport<'a> {
 
 /// Aggregated test result for a single physical core across all iterations.
 /// Used internally for deduplication before report generation.
-#[allow(dead_code)]
 struct AggregatedCoreResult {
     core_id: u32,
+    #[cfg_attr(not(test), allow(dead_code))]
     logical_cpu_ids: Vec<u32>,
     worst_status: CoreStatus,
     all_mprime_errors: Vec<MprimeError>,
     all_mce_errors: Vec<MceError>,
+    #[cfg_attr(not(test), allow(dead_code))]
     total_iterations: u32,
 }
 
@@ -82,33 +83,28 @@ impl<'a> StabilityReport<'a> {
         }
 
         let mut output = String::new();
+        let deduped = self.deduplicate_results();
 
-        // Header
         output.push_str(&self.format_header(use_colors));
         output.push('\n');
 
-        if let Some(uefi_section) = self.format_uefi_section(use_colors) {
-            output.push_str(&uefi_section);
-        }
-
-        // Per-core results
-        if self.results.results.is_empty() {
+        if deduped.is_empty() {
             output.push_str(&self.format_no_data(use_colors));
         } else {
-            for result in &self.results.results {
-                output.push_str(&self.format_core_result(result, use_colors));
+            for result in &deduped {
+                output.push_str(&self.format_aggregated_core(result, use_colors));
                 output.push('\n');
             }
         }
 
         // Summary separator
-        if !self.results.results.is_empty() {
+        if !deduped.is_empty() {
             output.push_str(&self.format_separator(use_colors));
             output.push('\n');
         }
 
         // Summary section
-        output.push_str(&self.format_summary(use_colors));
+        output.push_str(&self.format_summary(&deduped, use_colors));
         output.push('\n');
 
         // Footer
@@ -121,7 +117,7 @@ impl<'a> StabilityReport<'a> {
         Ok(output)
     }
 
-    fn format_header(&self, _use_colors: bool) -> String {
+    fn format_header(&self, use_colors: bool) -> String {
         let width = 62;
         let mut output = String::new();
 
@@ -138,6 +134,46 @@ impl<'a> StabilityReport<'a> {
         output.push_str(&" ".repeat(width - padding - title.len()));
         output.push_str(BOX_VERTICAL);
         output.push('\n');
+
+        if let Some(settings) = self.uefi_settings {
+            if !settings.available {
+                let yellow = if use_colors { COLOR_YELLOW } else { "" };
+                let reset = if use_colors { COLOR_RESET } else { "" };
+                output.push_str(&format_box_line(&format!(
+                    " {yellow}PBO: ⚠ unavailable (run as root){reset}"
+                )));
+                output.push('\n');
+            } else {
+                if let Some(pbo_status) = settings.pbo_status.as_deref() {
+                    output.push_str(&format_box_line(&format!(" PBO Status: {pbo_status}")));
+                    output.push('\n');
+                }
+
+                if let Some(limits) = &settings.pbo_limits {
+                    let parts: Vec<String> = [
+                        limits.ppt_limit.as_deref().map(|v| format!("PPT: {v}")),
+                        limits.tdc_limit.as_deref().map(|v| format!("TDC: {v}")),
+                        limits.edc_limit.as_deref().map(|v| format!("EDC: {v}")),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+
+                    if !parts.is_empty() {
+                        output
+                            .push_str(&format_box_line(&format!(" Limits: {}", parts.join(" | "))));
+                        output.push('\n');
+                    }
+                }
+
+                if let Some(agesa_version) = settings.agesa_version.as_deref() {
+                    output.push_str(&format_box_line(&format!(
+                        " AGESA Version: {agesa_version}"
+                    )));
+                    output.push('\n');
+                }
+            }
+        }
 
         output.push_str(BOX_TEE_LEFT);
         output.push_str(&BOX_HORIZONTAL.repeat(width));
@@ -168,99 +204,6 @@ impl<'a> StabilityReport<'a> {
         output
     }
 
-    fn format_uefi_section(&self, use_colors: bool) -> Option<String> {
-        let settings = self.uefi_settings?;
-        let mut output = String::new();
-
-        output.push_str(&self.format_separator(use_colors));
-        output.push('\n');
-
-        if !settings.available {
-            let yellow = if use_colors { COLOR_YELLOW } else { "" };
-            let reset = if use_colors { COLOR_RESET } else { "" };
-            output.push_str(&format_box_line(&format!(
-                "{yellow}⚠ UEFI Settings: Unavailable{reset}"
-            )));
-            output.push('\n');
-            output.push_str(&format_box_line(
-                " Run as root for UEFI/BIOS settings in report",
-            ));
-            output.push('\n');
-            output.push_str(&self.format_separator(use_colors));
-            output.push('\n');
-            return Some(output);
-        }
-
-        output.push_str(&format_box_line(" UEFI/BIOS Settings"));
-        output.push('\n');
-
-        if let Some(pbo_status) = settings.pbo_status.as_deref() {
-            output.push_str(&format_box_line(&format!("   PBO Status: {pbo_status}")));
-            output.push('\n');
-        }
-
-        if let Some(limits) = &settings.pbo_limits {
-            let parts: Vec<String> = [
-                limits
-                    .ppt_limit
-                    .as_deref()
-                    .map(|value| format!("PPT: {value}")),
-                limits
-                    .tdc_limit
-                    .as_deref()
-                    .map(|value| format!("TDC: {value}")),
-                limits
-                    .edc_limit
-                    .as_deref()
-                    .map(|value| format!("EDC: {value}")),
-            ]
-            .into_iter()
-            .flatten()
-            .collect();
-
-            if !parts.is_empty() {
-                output.push_str(&format_box_line(&format!(
-                    "   Limits: {}",
-                    parts.join(" | ")
-                )));
-                output.push('\n');
-            }
-        }
-
-        if let Some(agesa_version) = settings.agesa_version.as_deref() {
-            output.push_str(&format_box_line(&format!(
-                "   AGESA Version: {agesa_version}"
-            )));
-            output.push('\n');
-        }
-
-        if let Some(offsets) = &settings.curve_optimizer_offsets {
-            if !offsets.is_empty() {
-                output.push_str(&format_box_line("   Curve Optimizer Offsets:"));
-                output.push('\n');
-
-                let entries: Vec<(u32, i32)> = offsets
-                    .iter()
-                    .map(|(core, offset)| (*core, *offset))
-                    .collect();
-                for chunk in entries.chunks(3) {
-                    let columns = chunk
-                        .iter()
-                        .map(|(core, offset)| format!("Core {:2}: {:4}", core, offset))
-                        .collect::<Vec<_>>()
-                        .join("  ");
-                    output.push_str(&format_box_line(&format!("     {columns}")));
-                    output.push('\n');
-                }
-            }
-        }
-
-        output.push_str(&self.format_separator(use_colors));
-        output.push('\n');
-
-        Some(output)
-    }
-
     fn format_no_data(&self, _use_colors: bool) -> String {
         format!(
             "{} No test data available                                      {}\n",
@@ -268,18 +211,17 @@ impl<'a> StabilityReport<'a> {
         )
     }
 
-    fn format_core_result(&self, result: &CoreTestResult, use_colors: bool) -> String {
+    fn format_aggregated_core(&self, result: &AggregatedCoreResult, use_colors: bool) -> String {
         let mut output = String::new();
 
-        // Main status line
-        let status_symbol = match result.status {
+        let status_symbol = match result.worst_status {
             CoreStatus::Passed => "✓",
             CoreStatus::Failed => "✗",
             CoreStatus::Interrupted => "⊘",
             CoreStatus::Skipped => "○",
         };
 
-        let status_text = match result.status {
+        let status_text = match result.worst_status {
             CoreStatus::Passed => "STABLE",
             CoreStatus::Failed => "UNSTABLE",
             CoreStatus::Interrupted => "INTERRUPTED",
@@ -287,7 +229,7 @@ impl<'a> StabilityReport<'a> {
         };
 
         let status_color = if use_colors {
-            match result.status {
+            match result.worst_status {
                 CoreStatus::Passed => COLOR_GREEN,
                 CoreStatus::Failed => COLOR_RED,
                 CoreStatus::Interrupted => COLOR_YELLOW,
@@ -303,45 +245,46 @@ impl<'a> StabilityReport<'a> {
             ""
         };
 
-        let iteration_info = match result.status {
-            CoreStatus::Passed => {
-                format!(
-                    "({}/{} iterations)",
-                    result.iterations_completed, result.iterations_completed
-                )
+        let co_part = if let Some(settings) = self.uefi_settings {
+            if settings.available {
+                if let Some(offsets) = &settings.curve_optimizer_offsets {
+                    if let Some(&offset) = offsets.get(&result.core_id) {
+                        let (label, use_yellow) =
+                            co_offset_label(offset, result.worst_status == CoreStatus::Failed);
+                        if use_yellow && use_colors {
+                            format!(
+                                "  {}⚠ CO offset: {} ({}){}",
+                                COLOR_YELLOW, offset, label, COLOR_RESET
+                            )
+                        } else {
+                            format!("  CO offset: {} ({})", offset, label)
+                        }
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
             }
-            CoreStatus::Failed => {
-                format!("(failed iteration {})", result.iterations_completed)
-            }
-            CoreStatus::Interrupted => {
-                format!("(interrupted at iteration {})", result.iterations_completed)
-            }
-            CoreStatus::Skipped => String::new(),
+        } else {
+            String::new()
         };
 
         let line = format!(
-            "{} Core {:2}: {}{} {}{}  {}",
-            BOX_VERTICAL,
-            result.core_id,
-            status_color,
-            status_symbol,
-            status_text,
-            reset,
-            iteration_info
+            "{} Core {:2}: {}{} {}{}{}",
+            BOX_VERTICAL, result.core_id, status_color, status_symbol, status_text, reset, co_part
         );
 
-        // Pad to width
-        let visible_len = line.chars().filter(|c| !c.is_ascii_control()).count()
-            - status_color.len()
-            - reset.len();
-        let padding = 62_usize.saturating_sub(visible_len);
+        let vis = visible_len(&line);
+        let padding = 65_usize.saturating_sub(vis);
         output.push_str(&line);
         output.push_str(&" ".repeat(padding));
         output.push_str(BOX_VERTICAL);
         output.push('\n');
 
-        // Error details
-        for error in &result.mprime_errors {
+        for error in &result.all_mprime_errors {
             let error_type = match error.error_type {
                 MprimeErrorType::RoundoffError => "mprime: ROUNDOFF",
                 MprimeErrorType::HardwareFailure => "mprime: Hardware failure",
@@ -361,15 +304,15 @@ impl<'a> StabilityReport<'a> {
             };
 
             let detail = format!("{}   └─ {}{}", BOX_VERTICAL, error_type, fft_info);
-            let visible_len = detail.chars().count();
-            let padding = 62_usize.saturating_sub(visible_len.saturating_sub(3));
+            let vis = visible_len(&detail);
+            let padding = 65_usize.saturating_sub(vis);
             output.push_str(&detail);
             output.push_str(&" ".repeat(padding));
             output.push_str(BOX_VERTICAL);
             output.push('\n');
         }
 
-        for error in &result.mce_errors {
+        for error in &result.all_mce_errors {
             let error_type = match error.error_type {
                 MceErrorType::MachineCheck => "MCE: Machine Check",
                 MceErrorType::HardwareError => "MCE: Hardware Error",
@@ -385,103 +328,39 @@ impl<'a> StabilityReport<'a> {
             };
 
             let detail = format!("{}   └─ {}{}", BOX_VERTICAL, error_type, bank_info);
-            let visible_len = detail.chars().count();
-            let padding = 62_usize.saturating_sub(visible_len.saturating_sub(3));
+            let vis = visible_len(&detail);
+            let padding = 65_usize.saturating_sub(vis);
             output.push_str(&detail);
             output.push_str(&" ".repeat(padding));
             output.push_str(BOX_VERTICAL);
             output.push('\n');
         }
 
-        if let Some(settings) = self.uefi_settings {
-            if settings.available {
-                if let Some(offsets) = &settings.curve_optimizer_offsets {
-                    if let Some(&offset) = offsets.get(&result.core_id) {
-                        let (label, use_yellow) =
-                            co_offset_label(offset, result.status == CoreStatus::Failed);
-                        let co_detail = if use_yellow && use_colors {
-                            format!(
-                                "{}   └─ {}⚠ CO offset: {} ({}){}",
-                                BOX_VERTICAL, COLOR_YELLOW, offset, label, COLOR_RESET
-                            )
-                        } else {
-                            format!("{}   └─ CO offset: {} ({})", BOX_VERTICAL, offset, label)
-                        };
-                        let visible_len = co_detail.chars().count()
-                            - if use_yellow && use_colors {
-                                COLOR_YELLOW.len() + COLOR_RESET.len()
-                            } else {
-                                0
-                            };
-                        let padding = 62_usize.saturating_sub(visible_len.saturating_sub(3));
-                        output.push_str(&co_detail);
-                        output.push_str(&" ".repeat(padding));
-                        output.push_str(BOX_VERTICAL);
-                        output.push('\n');
-                    }
-                }
-            }
-        }
-
         output
     }
 
-    fn format_summary(&self, _use_colors: bool) -> String {
+    fn format_summary(&self, deduped: &[AggregatedCoreResult], _use_colors: bool) -> String {
         let mut output = String::new();
 
-        let stable_count = self
-            .results
-            .results
-            .iter()
-            .filter(|r| r.status == CoreStatus::Passed)
-            .count();
-
-        let unstable_count = self
-            .results
-            .results
-            .iter()
-            .filter(|r| r.status == CoreStatus::Failed)
-            .count();
-
-        let total_count = self
-            .results
-            .results
-            .iter()
-            .filter(|r| r.status == CoreStatus::Passed || r.status == CoreStatus::Failed)
-            .count();
-
-        let summary_line = format!(
-            "{} Summary: {}/{} cores stable, {} unstable",
-            BOX_VERTICAL, stable_count, total_count, unstable_count
-        );
-        let visible_len = summary_line.chars().count();
-        let padding = 62_usize.saturating_sub(visible_len.saturating_sub(3));
-        output.push_str(&summary_line);
-        output.push_str(&" ".repeat(padding));
-        output.push_str(BOX_VERTICAL);
-        output.push('\n');
-
-        // Duration and iterations
         let duration_str = format_duration(self.results.total_duration);
         let duration_line = format!(
             "{} Duration: {} | Iterations: {}",
             BOX_VERTICAL, duration_str, self.results.iterations_completed
         );
-        let visible_len = duration_line.chars().count();
-        let padding = 62_usize.saturating_sub(visible_len.saturating_sub(3));
+        let vis = visible_len(&duration_line);
+        let padding = 65_usize.saturating_sub(vis);
         output.push_str(&duration_line);
         output.push_str(&" ".repeat(padding));
         output.push_str(BOX_VERTICAL);
         output.push('\n');
 
-        // MCE error counts
-        let (corrected_count, uncorrected_count) = self.count_mce_errors();
+        let (corrected_count, uncorrected_count) = Self::count_mce_errors_deduped(deduped);
         let mce_line = format!(
             "{} MCE Errors: {} corrected, {} uncorrected",
             BOX_VERTICAL, corrected_count, uncorrected_count
         );
-        let visible_len = mce_line.chars().count();
-        let padding = 62_usize.saturating_sub(visible_len.saturating_sub(3));
+        let vis = visible_len(&mce_line);
+        let padding = 65_usize.saturating_sub(vis);
         output.push_str(&mce_line);
         output.push_str(&" ".repeat(padding));
         output.push_str(BOX_VERTICAL);
@@ -489,12 +368,12 @@ impl<'a> StabilityReport<'a> {
         output
     }
 
-    fn count_mce_errors(&self) -> (usize, usize) {
+    fn count_mce_errors_deduped(deduped: &[AggregatedCoreResult]) -> (usize, usize) {
         let mut corrected = 0;
         let mut uncorrected = 0;
 
-        for result in &self.results.results {
-            for error in &result.mce_errors {
+        for result in deduped {
+            for error in &result.all_mce_errors {
                 match error.error_type {
                     MceErrorType::EdacCorrectable => corrected += 1,
                     MceErrorType::EdacUncorrectable => uncorrected += 1,
@@ -508,11 +387,10 @@ impl<'a> StabilityReport<'a> {
     }
 
     fn generate_result_line(&self) -> String {
-        let failed_cores: Vec<u32> = self
-            .results
-            .results
+        let deduped = self.deduplicate_results();
+        let failed_cores: Vec<u32> = deduped
             .iter()
-            .filter(|r| r.status == CoreStatus::Failed)
+            .filter(|r| r.worst_status == CoreStatus::Failed)
             .map(|r| r.core_id)
             .collect();
 
@@ -528,7 +406,6 @@ impl<'a> StabilityReport<'a> {
         }
     }
 
-    #[allow(dead_code)]
     fn deduplicate_results(&self) -> Vec<AggregatedCoreResult> {
         let mut by_core: BTreeMap<u32, Vec<&CoreTestResult>> = BTreeMap::new();
         for result in &self.results.results {
@@ -715,9 +592,10 @@ mod tests {
 
         // THEN: Shows stable summary
         assert!(output.contains("STABLE"));
-        assert!(output.contains("2/2 cores stable, 0 unstable"));
         assert!(output.contains("RESULT: STABLE"));
         assert!(output.contains("AMD Ryzen 9 5900X"));
+        assert!(output.contains("Duration:"));
+        assert!(output.contains("Iterations:"));
     }
 
     #[test]
@@ -761,7 +639,6 @@ mod tests {
 
         // THEN: Highlights unstable core
         assert!(output.contains("UNSTABLE"));
-        assert!(output.contains("1/2 cores stable, 1 unstable"));
         assert!(output.contains("RESULT: UNSTABLE cores=1"));
         assert!(output.contains("mprime: ROUNDOFF"));
         assert!(output.contains("1344K FFT"));
@@ -800,7 +677,6 @@ mod tests {
         // THEN: Includes MCE details
         assert!(output.contains("MCE: Machine Check"));
         assert!(output.contains("Bank 5"));
-        assert!(output.contains("0/1 cores stable, 1 unstable"));
         assert!(output.contains("1 corrected, 0 uncorrected"));
     }
 
@@ -840,7 +716,6 @@ mod tests {
 
         // THEN: Shows interrupted status
         assert!(output.contains("INTERRUPTED"));
-        assert!(output.contains("1/1 cores stable, 0 unstable")); // Interrupted cores don't count as unstable
     }
 
     #[test]
@@ -867,7 +742,6 @@ mod tests {
         let output = report.generate().expect("report generation should succeed");
 
         // THEN: Shows iteration count
-        assert!(output.contains("(3/3 iterations)"));
         assert!(output.contains("Iterations: 3"));
         assert!(output.contains("18m 0s"));
     }
@@ -887,8 +761,7 @@ mod tests {
         let report = StabilityReport::new(&results, &topology, Some(&settings));
         let output = report.generate().expect("report generation should succeed");
 
-        // THEN: Shows PBO status in UEFI section
-        assert!(output.contains("UEFI/BIOS Settings"));
+        // THEN: Shows PBO status in header
         assert!(output.contains("PBO Status: Enabled"));
     }
 
@@ -936,7 +809,7 @@ mod tests {
     }
 
     #[test]
-    fn given_uefi_with_curve_optimizer_offsets_when_formatting_then_shows_three_column_rows() {
+    fn given_uefi_with_curve_optimizer_offsets_when_formatting_then_shows_co_on_per_core_line() {
         // GIVEN: Available UEFI settings with multiple CO offsets
         let settings = UefiSettings {
             available: true,
@@ -950,10 +823,10 @@ mod tests {
         let report = StabilityReport::new(&results, &topology, Some(&settings));
         let output = report.generate().expect("report generation should succeed");
 
-        // THEN: Shows offsets grouped into rows of three columns
-        assert!(output.contains("Curve Optimizer Offsets:"));
-        assert!(output.contains("Core  0:  -30  Core  1:  -25  Core  2:  -20"));
-        assert!(output.contains("Core  3:  -15"));
+        // THEN: CO appears on per-core line, no bulk table
+        assert!(!output.contains("Curve Optimizer Offsets:"));
+        assert!(output.contains("CO offset: -30 (aggressive)"));
+        assert!(!output.contains("Core  1:  -25"));
     }
 
     #[test]
@@ -967,9 +840,8 @@ mod tests {
         let report = StabilityReport::new(&results, &topology, Some(&settings));
         let output = report.generate().expect("report generation should succeed");
 
-        // THEN: Shows unavailable notice
-        assert!(output.contains("⚠ UEFI Settings: Unavailable"));
-        assert!(output.contains("Run as root for UEFI/BIOS settings in report"));
+        // THEN: Shows unavailable notice in header
+        assert!(output.contains("PBO: ⚠ unavailable (run as root)"));
     }
 
     #[test]
@@ -985,6 +857,7 @@ mod tests {
         // THEN: Omits UEFI section entirely
         assert!(!output.contains("UEFI/BIOS Settings"));
         assert!(!output.contains("UEFI Settings: Unavailable"));
+        assert!(!output.contains("PBO:"));
     }
 
     #[test]
@@ -1002,10 +875,10 @@ mod tests {
         let report = StabilityReport::new(&results, &topology, Some(&settings));
         let output = report.generate().expect("report generation should succeed");
 
-        // THEN: Places UEFI section before per-core results
+        // THEN: PBO status appears in header before per-core results
         let uefi_index = output
-            .find("UEFI/BIOS Settings")
-            .expect("UEFI section present");
+            .find("PBO Status:")
+            .expect("PBO Status present in header");
         let core_index = output.find("Core  0:").expect("core results present");
         assert!(uefi_index < core_index);
     }
@@ -1038,7 +911,7 @@ mod tests {
         let report = StabilityReport::new(&results, &topology, Some(&settings));
         let output = report.generate().expect("report generation should succeed");
 
-        // THEN: The warning annotation is shown inside the core result box
+        // THEN: The warning annotation is shown on the main status line
         assert!(output.contains("CO offset: -25 (aggressive)"));
     }
 
@@ -1419,5 +1292,275 @@ mod tests {
         // THEN: worst_status=Interrupted
         assert_eq!(deduped.len(), 1);
         assert_eq!(deduped[0].worst_status, CoreStatus::Interrupted);
+    }
+
+    #[test]
+    fn given_multi_iteration_results_when_generating_then_each_core_appears_once() {
+        // GIVEN: 2 cores × 2 iterations (4 total entries)
+        let topology = build_test_topology();
+        let results = CycleResults {
+            results: vec![
+                CoreTestResult {
+                    core_id: 0,
+                    logical_cpu_ids: vec![0],
+                    status: CoreStatus::Passed,
+                    mprime_errors: Vec::new(),
+                    mce_errors: Vec::new(),
+                    duration_tested: Duration::from_secs(360),
+                    iterations_completed: 2,
+                },
+                CoreTestResult {
+                    core_id: 1,
+                    logical_cpu_ids: vec![1],
+                    status: CoreStatus::Passed,
+                    mprime_errors: Vec::new(),
+                    mce_errors: Vec::new(),
+                    duration_tested: Duration::from_secs(360),
+                    iterations_completed: 2,
+                },
+                CoreTestResult {
+                    core_id: 0,
+                    logical_cpu_ids: vec![0],
+                    status: CoreStatus::Passed,
+                    mprime_errors: Vec::new(),
+                    mce_errors: Vec::new(),
+                    duration_tested: Duration::from_secs(360),
+                    iterations_completed: 2,
+                },
+                CoreTestResult {
+                    core_id: 1,
+                    logical_cpu_ids: vec![1],
+                    status: CoreStatus::Passed,
+                    mprime_errors: Vec::new(),
+                    mce_errors: Vec::new(),
+                    duration_tested: Duration::from_secs(360),
+                    iterations_completed: 2,
+                },
+            ],
+            total_duration: Duration::from_secs(1440),
+            iterations_completed: 2,
+            interrupted: false,
+        };
+
+        // WHEN: Generating report
+        let report = StabilityReport::new(&results, &topology, None);
+        let output = report.generate().expect("report generation should succeed");
+
+        // THEN: Each core appears exactly once
+        let core0_count = output.matches("Core  0:").count();
+        let core1_count = output.matches("Core  1:").count();
+        assert_eq!(core0_count, 1, "Core 0 should appear exactly once");
+        assert_eq!(core1_count, 1, "Core 1 should appear exactly once");
+    }
+
+    #[test]
+    fn given_failed_core_across_iterations_when_generating_then_result_line_no_duplicates() {
+        // GIVEN: Core 1 fails in 2 iterations
+        let topology = build_test_topology();
+        let results = CycleResults {
+            results: vec![
+                CoreTestResult {
+                    core_id: 1,
+                    logical_cpu_ids: vec![1],
+                    status: CoreStatus::Failed,
+                    mprime_errors: Vec::new(),
+                    mce_errors: Vec::new(),
+                    duration_tested: Duration::from_secs(120),
+                    iterations_completed: 1,
+                },
+                CoreTestResult {
+                    core_id: 1,
+                    logical_cpu_ids: vec![1],
+                    status: CoreStatus::Failed,
+                    mprime_errors: Vec::new(),
+                    mce_errors: Vec::new(),
+                    duration_tested: Duration::from_secs(120),
+                    iterations_completed: 2,
+                },
+            ],
+            total_duration: Duration::from_secs(240),
+            iterations_completed: 2,
+            interrupted: false,
+        };
+
+        // WHEN: Generating report
+        let report = StabilityReport::new(&results, &topology, None);
+        let output = report.generate().expect("report generation should succeed");
+
+        // THEN: RESULT line has no duplicate core IDs
+        assert!(
+            output.contains("RESULT: UNSTABLE cores=1\n"),
+            "should have 'cores=1' not 'cores=1,1'"
+        );
+        assert!(
+            !output.contains("cores=1,1"),
+            "duplicate core IDs must not appear"
+        );
+    }
+
+    #[test]
+    fn given_skipped_core_when_generating_then_omitted_from_report() {
+        // GIVEN: One passed core, one skipped core
+        let topology = build_test_topology();
+        let results = CycleResults {
+            results: vec![
+                CoreTestResult {
+                    core_id: 0,
+                    logical_cpu_ids: vec![0],
+                    status: CoreStatus::Passed,
+                    mprime_errors: Vec::new(),
+                    mce_errors: Vec::new(),
+                    duration_tested: Duration::from_secs(360),
+                    iterations_completed: 1,
+                },
+                CoreTestResult {
+                    core_id: 2,
+                    logical_cpu_ids: vec![2],
+                    status: CoreStatus::Skipped,
+                    mprime_errors: Vec::new(),
+                    mce_errors: Vec::new(),
+                    duration_tested: Duration::from_secs(0),
+                    iterations_completed: 0,
+                },
+            ],
+            total_duration: Duration::from_secs(360),
+            iterations_completed: 1,
+            interrupted: false,
+        };
+
+        // WHEN: Generating report
+        let report = StabilityReport::new(&results, &topology, None);
+        let output = report.generate().expect("report generation should succeed");
+
+        // THEN: Skipped core does not appear in report
+        assert!(output.contains("Core  0:"), "passed core should be present");
+        assert!(
+            !output.contains("Core  2:"),
+            "skipped core should be omitted"
+        );
+    }
+
+    #[test]
+    fn given_uefi_available_when_generating_then_header_contains_pbo_and_limits() {
+        // GIVEN: Full UEFI data
+        let settings = UefiSettings {
+            available: true,
+            pbo_status: Some("Enabled".to_string()),
+            pbo_limits: Some(PboLimits {
+                ppt_limit: Some("142W".to_string()),
+                tdc_limit: Some("95A".to_string()),
+                edc_limit: Some("180A".to_string()),
+            }),
+            agesa_version: Some("1.2.0.7".to_string()),
+            ..Default::default()
+        };
+        let results = build_test_cycle_results_stable();
+        let topology = build_test_topology();
+
+        // WHEN: Generating report
+        let report = StabilityReport::new(&results, &topology, Some(&settings));
+        let output = report.generate().expect("report generation should succeed");
+
+        // THEN: PBO, Limits, AGESA in header before core lines
+        let pbo_idx = output
+            .find("PBO Status: Enabled")
+            .expect("PBO Status in output");
+        let core_idx = output.find("Core  0:").expect("Core 0 in output");
+        assert!(
+            pbo_idx < core_idx,
+            "PBO should appear before core lines (in header)"
+        );
+        assert!(
+            output.contains("PPT: 142W | TDC: 95A | EDC: 180A"),
+            "limits present"
+        );
+        assert!(output.contains("AGESA Version: 1.2.0.7"), "AGESA present");
+        assert!(
+            !output.contains("UEFI/BIOS Settings"),
+            "no old UEFI section title"
+        );
+        assert!(
+            !output.contains("Curve Optimizer Offsets:"),
+            "no bulk CO table"
+        );
+    }
+
+    #[test]
+    fn given_uefi_unavailable_when_generating_then_header_shows_unavailable() {
+        // GIVEN: Unavailable UEFI settings
+        let settings = UefiSettings::unavailable("permission denied");
+        let results = build_test_cycle_results_stable();
+        let topology = build_test_topology();
+
+        // WHEN: Generating report
+        let report = StabilityReport::new(&results, &topology, Some(&settings));
+        let output = report.generate().expect("report generation should succeed");
+
+        // THEN: Header shows unavailable notice (new format)
+        assert!(
+            output.contains("PBO: ⚠ unavailable (run as root)"),
+            "new unavailable notice"
+        );
+        assert!(
+            !output.contains("⚠ UEFI Settings: Unavailable"),
+            "old format gone"
+        );
+        assert!(
+            !output.contains("Run as root for UEFI/BIOS settings"),
+            "old hint gone"
+        );
+    }
+
+    #[test]
+    fn given_multi_iteration_errors_when_generating_then_all_errors_shown() {
+        // GIVEN: Core 0 iteration 1 has mprime error, iteration 2 has MCE error
+        let topology = build_test_topology();
+        let results = CycleResults {
+            results: vec![
+                CoreTestResult {
+                    core_id: 0,
+                    logical_cpu_ids: vec![0],
+                    status: CoreStatus::Failed,
+                    mprime_errors: vec![MprimeError {
+                        error_type: MprimeErrorType::RoundoffError,
+                        message: "ROUND OFF".to_string(),
+                        fft_size: Some(1344),
+                        timestamp: None,
+                    }],
+                    mce_errors: Vec::new(),
+                    duration_tested: Duration::from_secs(120),
+                    iterations_completed: 1,
+                },
+                CoreTestResult {
+                    core_id: 0,
+                    logical_cpu_ids: vec![0],
+                    status: CoreStatus::Failed,
+                    mprime_errors: Vec::new(),
+                    mce_errors: vec![MceError {
+                        cpu_id: 0,
+                        bank: Some(5),
+                        error_type: MceErrorType::MachineCheck,
+                        message: "MCE".to_string(),
+                        timestamp: "123".to_string(),
+                        apic_id: None,
+                    }],
+                    duration_tested: Duration::from_secs(120),
+                    iterations_completed: 2,
+                },
+            ],
+            total_duration: Duration::from_secs(240),
+            iterations_completed: 2,
+            interrupted: false,
+        };
+
+        // WHEN: Generating report
+        let report = StabilityReport::new(&results, &topology, None);
+        let output = report.generate().expect("report generation should succeed");
+
+        // THEN: Both errors shown under Core 0 (appears once)
+        let core0_count = output.matches("Core  0:").count();
+        assert_eq!(core0_count, 1, "Core 0 appears once");
+        assert!(output.contains("mprime: ROUNDOFF"), "mprime error present");
+        assert!(output.contains("MCE: Machine Check"), "MCE error present");
     }
 }
