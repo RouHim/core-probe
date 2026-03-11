@@ -10,9 +10,10 @@ use tracing::instrument;
 
 use crate::coordinator::{CoreStatus, CoreTestResult, CycleResults};
 use crate::cpu_topology::CpuTopology;
-use crate::error_parser::MprimeErrorType;
-use crate::mce_monitor::MceErrorType;
+use crate::error_parser::{MprimeError, MprimeErrorType};
+use crate::mce_monitor::{MceError, MceErrorType};
 use crate::uefi_reader::UefiSettings;
+use std::collections::BTreeMap;
 
 /// ANSI color codes for terminal output
 const COLOR_RED: &str = "\x1b[31m";
@@ -36,6 +37,18 @@ pub struct StabilityReport<'a> {
     topology: &'a CpuTopology,
     uefi_settings: Option<&'a UefiSettings>,
     quiet: bool,
+}
+
+/// Aggregated test result for a single physical core across all iterations.
+/// Used internally for deduplication before report generation.
+#[allow(dead_code)]
+struct AggregatedCoreResult {
+    core_id: u32,
+    logical_cpu_ids: Vec<u32>,
+    worst_status: CoreStatus,
+    all_mprime_errors: Vec<MprimeError>,
+    all_mce_errors: Vec<MceError>,
+    total_iterations: u32,
 }
 
 impl<'a> StabilityReport<'a> {
@@ -513,6 +526,60 @@ impl<'a> StabilityReport<'a> {
                 .join(",");
             format!("RESULT: UNSTABLE cores={}\n", core_list)
         }
+    }
+
+    #[allow(dead_code)]
+    fn deduplicate_results(&self) -> Vec<AggregatedCoreResult> {
+        let mut by_core: BTreeMap<u32, Vec<&CoreTestResult>> = BTreeMap::new();
+        for result in &self.results.results {
+            by_core.entry(result.core_id).or_default().push(result);
+        }
+
+        by_core
+            .into_values()
+            .filter_map(|entries| {
+                if entries.iter().all(|e| e.status == CoreStatus::Skipped) {
+                    return None;
+                }
+
+                let core_id = entries[0].core_id;
+                let logical_cpu_ids = entries[0].logical_cpu_ids.clone();
+
+                let worst_status = entries.iter().fold(CoreStatus::Passed, |worst, entry| {
+                    match (&worst, &entry.status) {
+                        (_, CoreStatus::Failed) => CoreStatus::Failed,
+                        (CoreStatus::Failed, _) => CoreStatus::Failed,
+                        (_, CoreStatus::Interrupted) => CoreStatus::Interrupted,
+                        (CoreStatus::Interrupted, _) => CoreStatus::Interrupted,
+                        _ => CoreStatus::Passed,
+                    }
+                });
+
+                let all_mprime_errors: Vec<MprimeError> = entries
+                    .iter()
+                    .flat_map(|e| e.mprime_errors.iter().cloned())
+                    .collect();
+                let all_mce_errors: Vec<MceError> = entries
+                    .iter()
+                    .flat_map(|e| e.mce_errors.iter().cloned())
+                    .collect();
+
+                let total_iterations = entries
+                    .iter()
+                    .map(|e| e.iterations_completed)
+                    .max()
+                    .unwrap_or(0);
+
+                Some(AggregatedCoreResult {
+                    core_id,
+                    logical_cpu_ids,
+                    worst_status,
+                    all_mprime_errors,
+                    all_mce_errors,
+                    total_iterations,
+                })
+            })
+            .collect()
     }
 }
 
@@ -1088,5 +1155,269 @@ mod tests {
         // THEN: Shows no data message
         assert!(output.contains("No test data available"));
         assert!(output.contains("RESULT: STABLE")); // No failures = stable
+    }
+
+    #[test]
+    fn given_single_iteration_when_dedup_then_returns_same_entries() {
+        // GIVEN: 2 cores, 1 iteration each
+        let topology = build_test_topology();
+        let results = CycleResults {
+            results: vec![
+                CoreTestResult {
+                    core_id: 0,
+                    logical_cpu_ids: vec![0],
+                    status: CoreStatus::Passed,
+                    mprime_errors: Vec::new(),
+                    mce_errors: Vec::new(),
+                    duration_tested: Duration::from_secs(360),
+                    iterations_completed: 1,
+                },
+                CoreTestResult {
+                    core_id: 1,
+                    logical_cpu_ids: vec![1],
+                    status: CoreStatus::Passed,
+                    mprime_errors: Vec::new(),
+                    mce_errors: Vec::new(),
+                    duration_tested: Duration::from_secs(360),
+                    iterations_completed: 1,
+                },
+            ],
+            total_duration: Duration::from_secs(720),
+            iterations_completed: 1,
+            interrupted: false,
+        };
+        // WHEN: Deduplicating
+        let report = StabilityReport::new(&results, &topology, None);
+        let deduped = report.deduplicate_results();
+        // THEN: 2 entries, one per core
+        assert_eq!(deduped.len(), 2);
+        assert_eq!(deduped[0].core_id, 0);
+        assert_eq!(deduped[1].core_id, 1);
+    }
+
+    #[test]
+    fn given_multi_iteration_passed_when_dedup_then_single_entry_per_core() {
+        // GIVEN: Core 0 appears 3 times (all Passed, 3 iterations)
+        let topology = build_test_topology();
+        let results = CycleResults {
+            results: vec![
+                CoreTestResult {
+                    core_id: 0,
+                    logical_cpu_ids: vec![0],
+                    status: CoreStatus::Passed,
+                    mprime_errors: Vec::new(),
+                    mce_errors: Vec::new(),
+                    duration_tested: Duration::from_secs(360),
+                    iterations_completed: 3,
+                },
+                CoreTestResult {
+                    core_id: 0,
+                    logical_cpu_ids: vec![0],
+                    status: CoreStatus::Passed,
+                    mprime_errors: Vec::new(),
+                    mce_errors: Vec::new(),
+                    duration_tested: Duration::from_secs(360),
+                    iterations_completed: 3,
+                },
+                CoreTestResult {
+                    core_id: 0,
+                    logical_cpu_ids: vec![0],
+                    status: CoreStatus::Passed,
+                    mprime_errors: Vec::new(),
+                    mce_errors: Vec::new(),
+                    duration_tested: Duration::from_secs(360),
+                    iterations_completed: 3,
+                },
+            ],
+            total_duration: Duration::from_secs(1080),
+            iterations_completed: 3,
+            interrupted: false,
+        };
+        // WHEN: Deduplicating
+        let report = StabilityReport::new(&results, &topology, None);
+        let deduped = report.deduplicate_results();
+        // THEN: 1 entry with worst_status=Passed
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(deduped[0].core_id, 0);
+        assert_eq!(deduped[0].worst_status, CoreStatus::Passed);
+        assert_eq!(deduped[0].total_iterations, 3);
+    }
+
+    #[test]
+    fn given_mixed_status_when_dedup_then_worst_wins() {
+        // GIVEN: Core 1 appears 3x (Passed, Failed, Passed)
+        let topology = build_test_topology();
+        let error = MprimeError {
+            error_type: MprimeErrorType::RoundoffError,
+            message: "err".to_string(),
+            fft_size: None,
+            timestamp: None,
+        };
+        let results = CycleResults {
+            results: vec![
+                CoreTestResult {
+                    core_id: 1,
+                    logical_cpu_ids: vec![1],
+                    status: CoreStatus::Passed,
+                    mprime_errors: Vec::new(),
+                    mce_errors: Vec::new(),
+                    duration_tested: Duration::from_secs(360),
+                    iterations_completed: 1,
+                },
+                CoreTestResult {
+                    core_id: 1,
+                    logical_cpu_ids: vec![1],
+                    status: CoreStatus::Failed,
+                    mprime_errors: vec![error.clone()],
+                    mce_errors: Vec::new(),
+                    duration_tested: Duration::from_secs(120),
+                    iterations_completed: 2,
+                },
+                CoreTestResult {
+                    core_id: 1,
+                    logical_cpu_ids: vec![1],
+                    status: CoreStatus::Passed,
+                    mprime_errors: Vec::new(),
+                    mce_errors: Vec::new(),
+                    duration_tested: Duration::from_secs(360),
+                    iterations_completed: 3,
+                },
+            ],
+            total_duration: Duration::from_secs(840),
+            iterations_completed: 3,
+            interrupted: false,
+        };
+        // WHEN: Deduplicating
+        let report = StabilityReport::new(&results, &topology, None);
+        let deduped = report.deduplicate_results();
+        // THEN: 1 entry, worst_status=Failed, error collected
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(deduped[0].worst_status, CoreStatus::Failed);
+        assert_eq!(deduped[0].all_mprime_errors.len(), 1);
+    }
+
+    #[test]
+    fn given_all_skipped_when_dedup_then_omitted() {
+        // GIVEN: Core 2 appears 2x (both Skipped)
+        let topology = build_test_topology();
+        let results = CycleResults {
+            results: vec![
+                CoreTestResult {
+                    core_id: 2,
+                    logical_cpu_ids: vec![2],
+                    status: CoreStatus::Skipped,
+                    mprime_errors: Vec::new(),
+                    mce_errors: Vec::new(),
+                    duration_tested: Duration::from_secs(0),
+                    iterations_completed: 0,
+                },
+                CoreTestResult {
+                    core_id: 2,
+                    logical_cpu_ids: vec![2],
+                    status: CoreStatus::Skipped,
+                    mprime_errors: Vec::new(),
+                    mce_errors: Vec::new(),
+                    duration_tested: Duration::from_secs(0),
+                    iterations_completed: 0,
+                },
+            ],
+            total_duration: Duration::from_secs(0),
+            iterations_completed: 2,
+            interrupted: false,
+        };
+        // WHEN: Deduplicating
+        let report = StabilityReport::new(&results, &topology, None);
+        let deduped = report.deduplicate_results();
+        // THEN: Empty — skipped core is omitted
+        assert!(deduped.is_empty());
+    }
+
+    #[test]
+    fn given_errors_across_iterations_when_dedup_then_all_collected() {
+        // GIVEN: Core 0: iteration 1 has 1 mprime error, iteration 2 has 1 MCE error
+        let topology = build_test_topology();
+        let mprime_err = MprimeError {
+            error_type: MprimeErrorType::RoundoffError,
+            message: "ROUND OFF".to_string(),
+            fft_size: Some(1344),
+            timestamp: None,
+        };
+        let mce_err = MceError {
+            cpu_id: 0,
+            bank: Some(5),
+            error_type: MceErrorType::MachineCheck,
+            message: "MCE".to_string(),
+            timestamp: "123".to_string(),
+            apic_id: None,
+        };
+        let results = CycleResults {
+            results: vec![
+                CoreTestResult {
+                    core_id: 0,
+                    logical_cpu_ids: vec![0],
+                    status: CoreStatus::Failed,
+                    mprime_errors: vec![mprime_err.clone()],
+                    mce_errors: Vec::new(),
+                    duration_tested: Duration::from_secs(120),
+                    iterations_completed: 1,
+                },
+                CoreTestResult {
+                    core_id: 0,
+                    logical_cpu_ids: vec![0],
+                    status: CoreStatus::Failed,
+                    mprime_errors: Vec::new(),
+                    mce_errors: vec![mce_err.clone()],
+                    duration_tested: Duration::from_secs(120),
+                    iterations_completed: 2,
+                },
+            ],
+            total_duration: Duration::from_secs(240),
+            iterations_completed: 2,
+            interrupted: false,
+        };
+        // WHEN: Deduplicating
+        let report = StabilityReport::new(&results, &topology, None);
+        let deduped = report.deduplicate_results();
+        // THEN: Both errors collected
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(deduped[0].all_mprime_errors.len(), 1);
+        assert_eq!(deduped[0].all_mce_errors.len(), 1);
+    }
+
+    #[test]
+    fn given_interrupted_and_passed_when_dedup_then_interrupted_wins() {
+        // GIVEN: Core 0 appears 2x (Passed, Interrupted)
+        let topology = build_test_topology();
+        let results = CycleResults {
+            results: vec![
+                CoreTestResult {
+                    core_id: 0,
+                    logical_cpu_ids: vec![0],
+                    status: CoreStatus::Passed,
+                    mprime_errors: Vec::new(),
+                    mce_errors: Vec::new(),
+                    duration_tested: Duration::from_secs(360),
+                    iterations_completed: 1,
+                },
+                CoreTestResult {
+                    core_id: 0,
+                    logical_cpu_ids: vec![0],
+                    status: CoreStatus::Interrupted,
+                    mprime_errors: Vec::new(),
+                    mce_errors: Vec::new(),
+                    duration_tested: Duration::from_secs(60),
+                    iterations_completed: 1,
+                },
+            ],
+            total_duration: Duration::from_secs(420),
+            iterations_completed: 1,
+            interrupted: true,
+        };
+        // WHEN: Deduplicating
+        let report = StabilityReport::new(&results, &topology, None);
+        let deduped = report.deduplicate_results();
+        // THEN: worst_status=Interrupted
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(deduped[0].worst_status, CoreStatus::Interrupted);
     }
 }
