@@ -380,6 +380,36 @@ impl<'a> StabilityReport<'a> {
             output.push('\n');
         }
 
+        if let Some(settings) = self.uefi_settings {
+            if settings.available {
+                if let Some(offsets) = &settings.curve_optimizer_offsets {
+                    if let Some(&offset) = offsets.get(&result.core_id) {
+                        let (label, use_yellow) =
+                            co_offset_label(offset, result.status == CoreStatus::Failed);
+                        let co_detail = if use_yellow && use_colors {
+                            format!(
+                                "{}   └─ {}⚠ CO offset: {} ({}){}",
+                                BOX_VERTICAL, COLOR_YELLOW, offset, label, COLOR_RESET
+                            )
+                        } else {
+                            format!("{}   └─ CO offset: {} ({})", BOX_VERTICAL, offset, label)
+                        };
+                        let visible_len = co_detail.chars().count()
+                            - if use_yellow && use_colors {
+                                COLOR_YELLOW.len() + COLOR_RESET.len()
+                            } else {
+                                0
+                            };
+                        let padding = 62_usize.saturating_sub(visible_len.saturating_sub(3));
+                        output.push_str(&co_detail);
+                        output.push_str(&" ".repeat(padding));
+                        output.push_str(BOX_VERTICAL);
+                        output.push('\n');
+                    }
+                }
+            }
+        }
+
         output
     }
 
@@ -515,6 +545,16 @@ fn visible_len(text: &str) -> usize {
     }
 
     len
+}
+
+fn co_offset_label(offset: i32, is_failed: bool) -> (&'static str, bool) {
+    match offset {
+        i32::MIN..=-20 => ("aggressive", is_failed),
+        -19..=-10 => ("moderate", false),
+        -9..=-1 => ("conservative", false),
+        0 => ("stock", false),
+        _ => ("positive", is_failed),
+    }
 }
 
 fn format_duration(duration: Duration) -> String {
@@ -901,6 +941,133 @@ mod tests {
             .expect("UEFI section present");
         let core_index = output.find("Core  0:").expect("core results present");
         assert!(uefi_index < core_index);
+    }
+
+    #[test]
+    fn given_failed_core_with_aggressive_co_offset_when_formatting_then_shows_warning_annotation() {
+        // GIVEN: A failed core with an aggressive CO offset
+        let settings = UefiSettings {
+            available: true,
+            curve_optimizer_offsets: Some(BTreeMap::from([(1, -25)])),
+            ..Default::default()
+        };
+        let topology = build_test_topology();
+        let results = CycleResults {
+            results: vec![CoreTestResult {
+                core_id: 1,
+                logical_cpu_ids: vec![1],
+                status: CoreStatus::Failed,
+                mprime_errors: Vec::new(),
+                mce_errors: Vec::new(),
+                duration_tested: Duration::from_secs(120),
+                iterations_completed: 1,
+            }],
+            total_duration: Duration::from_secs(120),
+            iterations_completed: 1,
+            interrupted: false,
+        };
+
+        // WHEN: Generating report
+        let report = StabilityReport::new(&results, &topology, Some(&settings));
+        let output = report.generate().expect("report generation should succeed");
+
+        // THEN: The warning annotation is shown inside the core result box
+        assert!(output.contains("CO offset: -25 (aggressive)"));
+    }
+
+    #[test]
+    fn given_passed_core_with_co_offset_when_formatting_then_shows_info_annotation() {
+        // GIVEN: A passed core with a moderate CO offset
+        let settings = UefiSettings {
+            available: true,
+            curve_optimizer_offsets: Some(BTreeMap::from([(0, -15)])),
+            ..Default::default()
+        };
+        let topology = build_test_topology();
+        let results = build_test_cycle_results_stable();
+
+        // WHEN: Generating report
+        let report = StabilityReport::new(&results, &topology, Some(&settings));
+        let output = report.generate().expect("report generation should succeed");
+
+        // THEN: The CO annotation is shown without yellow warning color codes
+        assert!(output.contains("CO offset: -15 (moderate)"));
+        assert!(!output.contains(COLOR_YELLOW));
+    }
+
+    #[test]
+    fn given_no_uefi_data_when_formatting_then_no_co_annotation() {
+        // GIVEN: No UEFI data
+        let topology = build_test_topology();
+        let results = build_test_cycle_results_stable();
+
+        // WHEN: Generating report
+        let report = StabilityReport::new(&results, &topology, None);
+        let output = report.generate().expect("report generation should succeed");
+
+        // THEN: No CO annotation is rendered
+        assert!(!output.contains("CO offset"));
+    }
+
+    #[test]
+    fn given_stock_co_offset_when_formatting_then_shows_stock_label() {
+        // GIVEN: A core with stock CO offset
+        let settings = UefiSettings {
+            available: true,
+            curve_optimizer_offsets: Some(BTreeMap::from([(0, 0)])),
+            ..Default::default()
+        };
+        let topology = build_test_topology();
+        let results = build_test_cycle_results_stable();
+
+        // WHEN: Generating report
+        let report = StabilityReport::new(&results, &topology, Some(&settings));
+        let output = report.generate().expect("report generation should succeed");
+
+        // THEN: The stock label is shown
+        assert!(output.contains("CO offset: 0 (stock)"));
+    }
+
+    #[test]
+    fn given_core_not_in_co_map_when_formatting_then_no_annotation() {
+        // GIVEN: CO data exists for a different core only
+        let settings = UefiSettings {
+            available: true,
+            curve_optimizer_offsets: Some(BTreeMap::from([(5, -20)])),
+            ..Default::default()
+        };
+        let topology = build_test_topology();
+        let results = build_test_cycle_results_stable();
+
+        // WHEN: Generating report
+        let report = StabilityReport::new(&results, &topology, Some(&settings));
+        let output = report.generate().expect("report generation should succeed");
+
+        // THEN: No CO annotation is shown for unmatched core IDs
+        assert!(!output.contains("CO offset"));
+    }
+
+    #[test]
+    fn given_core_with_co_annotation_when_formatting_then_keeps_box_width() {
+        // GIVEN: A core with a CO annotation line
+        let settings = UefiSettings {
+            available: true,
+            curve_optimizer_offsets: Some(BTreeMap::from([(0, -15)])),
+            ..Default::default()
+        };
+        let topology = build_test_topology();
+        let results = build_test_cycle_results_stable();
+
+        // WHEN: Generating report
+        let report = StabilityReport::new(&results, &topology, Some(&settings));
+        let output = report.generate().expect("report generation should succeed");
+        let co_line = output
+            .lines()
+            .find(|line| line.contains("CO offset: -15 (moderate)"))
+            .expect("CO annotation line should be present");
+
+        // THEN: The box width remains aligned
+        assert_eq!(visible_len(co_line), 66);
     }
 
     #[test]
