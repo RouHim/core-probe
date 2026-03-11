@@ -224,6 +224,7 @@ pub fn parse_hii_questions(questions: &[Question]) -> UefiSettings {
 /// Read UEFI settings by extracting the HII database (requires root).
 pub fn read_uefi_settings_as_root() -> anyhow::Result<UefiSettings> {
     use uefisettings::exports::{identify_machine, HiiBackend};
+    use uefisettings_backend_thrift::Backend;
 
     let machine_info = identify_machine();
     tracing::info!(
@@ -232,6 +233,13 @@ pub fn read_uefi_settings_as_root() -> anyhow::Result<UefiSettings> {
         product_name = %machine_info.product_name,
         "UEFI machine identified"
     );
+
+    if !machine_info.backend.contains(&Backend::Hii) {
+        return Ok(UefiSettings::unavailable(
+            "HII backend not available on this machine (non-AMI BIOS or unsupported board)"
+                .to_string(),
+        ));
+    }
 
     let hii_db = HiiBackend::extract_db()
         .map_err(|e| anyhow::anyhow!("Failed to extract HII database: {}", e))?;
