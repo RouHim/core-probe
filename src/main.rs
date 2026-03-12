@@ -5,6 +5,7 @@ pub mod embedded;
 pub mod error_parser;
 pub mod hii_extractor;
 pub mod hii_question;
+pub mod ifr_parser;
 pub mod mce_monitor;
 pub mod mprime_config;
 pub mod mprime_runner;
