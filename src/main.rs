@@ -3,6 +3,7 @@ pub mod coordinator;
 pub mod cpu_topology;
 pub mod embedded;
 pub mod error_parser;
+pub mod hii_question;
 pub mod mce_monitor;
 pub mod mprime_config;
 pub mod mprime_runner;
