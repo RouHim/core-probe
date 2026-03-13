@@ -87,6 +87,27 @@ fn matches_cbs(name: &str, help: &str) -> bool {
     combined.contains("cbs") || combined.contains("amd overclocking")
 }
 
+fn non_empty_value(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Extract a version string from text by splitting on the first `:` or `=` separator.
+/// Returns the trimmed right-hand side if non-empty, None otherwise.
+fn extract_agesa_from_text(text: &str) -> Option<String> {
+    let sep_pos = text.find([':', '='])?;
+    let rhs = text[sep_pos + 1..].trim();
+    if rhs.is_empty() {
+        None
+    } else {
+        Some(rhs.to_string())
+    }
+}
+
 fn matches_any_amd(name: &str, help: &str) -> bool {
     matches_pbo(name, help)
         || matches_co(name, help)
@@ -154,20 +175,22 @@ pub fn parse_hii_questions(questions: &[HiiQuestion]) -> UefiSettings {
                 || name_lower.contains("cpb");
             let is_co = matches_co(name, help) && extract_core_id(name).is_some();
             if is_pbo_main && !is_co {
-                pbo_status = Some(answer.clone());
+                if let Some(value) = non_empty_value(answer) {
+                    pbo_status = Some(value);
+                }
             }
         }
 
         if matches_limits(name, help) {
             let name_lower = name.to_lowercase();
             if name_lower.contains("ppt") && ppt_limit.is_none() {
-                ppt_limit = Some(answer.clone());
+                ppt_limit = non_empty_value(answer);
             }
             if name_lower.contains("tdc") && tdc_limit.is_none() {
-                tdc_limit = Some(answer.clone());
+                tdc_limit = non_empty_value(answer);
             }
             if name_lower.contains("edc") && edc_limit.is_none() {
-                edc_limit = Some(answer.clone());
+                edc_limit = non_empty_value(answer);
             }
         }
 
@@ -180,7 +203,9 @@ pub fn parse_hii_questions(questions: &[HiiQuestion]) -> UefiSettings {
         }
 
         if agesa_version.is_none() && matches_agesa(name, help) {
-            agesa_version = Some(answer.clone());
+            agesa_version = non_empty_value(answer)
+                .or_else(|| extract_agesa_from_text(name))
+                .or_else(|| extract_agesa_from_text(help));
         }
     }
 
@@ -831,5 +856,55 @@ mod tests {
             !output.contains("CO offset:"),
             "should NOT show per-core CO annotation"
         );
+    }
+
+    #[test]
+    fn given_agesa_in_question_name_with_colon_when_parsing_then_extracts_version() {
+        let questions = vec![build_question(
+            "AGESA Version : ComboAm4v2PI 1.2.0.7",
+            "",
+            "",
+        )];
+
+        let settings = parse_hii_questions(&questions);
+
+        assert_eq!(
+            settings.agesa_version,
+            Some("ComboAm4v2PI 1.2.0.7".to_string())
+        );
+    }
+
+    #[test]
+    fn given_agesa_in_answer_when_parsing_then_uses_answer() {
+        let questions = vec![build_question("AGESA", "1.2.0.7", "")];
+
+        let settings = parse_hii_questions(&questions);
+
+        assert_eq!(settings.agesa_version, Some("1.2.0.7".to_string()));
+    }
+
+    #[test]
+    fn given_agesa_in_help_text_when_parsing_then_extracts_from_help() {
+        let questions = vec![build_question(
+            "AgesaVersion",
+            "",
+            "Version : ComboAm4v2PI 1.2.0.7",
+        )];
+
+        let settings = parse_hii_questions(&questions);
+
+        assert_eq!(
+            settings.agesa_version,
+            Some("ComboAm4v2PI 1.2.0.7".to_string())
+        );
+    }
+
+    #[test]
+    fn given_agesa_name_without_separator_when_parsing_then_does_not_extract() {
+        let questions = vec![build_question("AGESA ComboAm4v2PI", "", "")];
+
+        let settings = parse_hii_questions(&questions);
+
+        assert_eq!(settings.agesa_version, None);
     }
 }
