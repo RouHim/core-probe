@@ -16,8 +16,6 @@ regex = "1.11"
 ctrlc = "3.5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-uefisettings = "0.1.5"
-uefisettings_backend_thrift = "0.1.0"
 
 [profile.release]
 strip = true
