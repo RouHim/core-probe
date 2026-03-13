@@ -390,6 +390,7 @@ fn build_form_index(form_data: &[u8]) -> anyhow::Result<FormIndex> {
         offset += advance;
     }
 
+    tracing::debug!(forms = form_index.len(), "form index built");
     Ok((form_index, root_form_id))
 }
 
@@ -476,6 +477,12 @@ fn walk_form(
     while i < ops.len() {
         let op = &ops[i];
 
+        tracing::debug!(
+            opcode = format!("0x{:02X}", op.opcode),
+            data_len = op.data.len(),
+            "processing IFR opcode"
+        );
+
         match op.opcode {
             EFI_IFR_REF_OP => {
                 for target_form_id in extract_ref_form_ids(op, form_index) {
@@ -491,6 +498,7 @@ fn walk_form(
                             q.answer = answer;
                         }
                     }
+                    tracing::debug!(name = %q.name, answer = %q.answer, "emitting HII question");
                     questions.push(q);
                 }
             }
@@ -499,6 +507,7 @@ fn walk_form(
             | EFI_IFR_STRING_OP
             | EFI_IFR_ORDERED_LIST_OP => {
                 if let Some(q) = extract_question(op, string_table) {
+                    tracing::debug!(name = %q.name, answer = %q.answer, "emitting HII question");
                     questions.push(q);
                 }
             }
@@ -512,6 +521,7 @@ fn walk_form(
                         let text_two_id = read_u16(&op.data, 4).unwrap_or(0);
                         help = resolve_string(string_table, text_two_id);
                     }
+                    tracing::debug!(name = %name, answer = "", "emitting HII question");
                     questions.push(HiiQuestion {
                         name,
                         answer: String::new(),
@@ -519,7 +529,11 @@ fn walk_form(
                     });
                 }
             }
-            _ => { /* skip end, varstore, suppress_if, etc. */ }
+            _ => {
+                if op.opcode == 0x0A {
+                    tracing::debug!(op_index = i, "traversing through SUPPRESS_IF opcode");
+                }
+            }
         }
 
         i += 1;
@@ -592,6 +606,7 @@ fn extract_oneof_answer(
     if let Some(dv) = &default_value {
         for (text, raw) in &options {
             if raw == dv {
+                tracing::debug!(option = %text, "DEFAULT_OP selected option");
                 return Some(text.clone());
             }
         }
@@ -1511,5 +1526,20 @@ mod tests {
             .expect("PBO question should exist");
 
         assert_eq!(pbo.answer, "Auto");
+    }
+
+    #[test]
+    fn given_tracing_enabled_when_parsing_then_does_not_panic() {
+        let _ = tracing_subscriber::fmt::try_init();
+        let mut form_data = Vec::new();
+        form_data.extend_from_slice(&make_formset_op());
+        form_data.extend_from_slice(&make_form_op(1, 0));
+        form_data.extend_from_slice(&make_numeric_op(1, 2));
+        form_data.extend_from_slice(&make_end_op());
+        form_data.extend_from_slice(&make_end_op());
+        let string_data = make_string_package(&["Test", "Help"]);
+        let hii_db = make_hii_db(&form_data, Some(&string_data));
+        let result = parse_ifr_to_questions(&hii_db);
+        assert!(result.is_ok(), "parsing with tracing should not panic");
     }
 }

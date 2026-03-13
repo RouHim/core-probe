@@ -151,6 +151,11 @@ pub fn parse_hii_questions(questions: &[HiiQuestion]) -> UefiSettings {
     let mut agesa_version: Option<String> = None;
     let mut raw_settings: Vec<(String, String)> = Vec::new();
 
+    tracing::debug!(
+        total_questions = questions.len(),
+        "starting AMD CBS question matching"
+    );
+
     for q in questions {
         let name = &q.name;
         let help = &q.help;
@@ -159,6 +164,7 @@ pub fn parse_hii_questions(questions: &[HiiQuestion]) -> UefiSettings {
         if matches_any_amd(name, help) {
             raw_settings.push((name.clone(), answer.clone()));
             tracing::info!(name = %name, answer = %answer, "matched AMD setting");
+            tracing::debug!(name = %name, "question matched AMD filter");
         } else {
             let combined = format!("{name} {help}").to_lowercase();
             if combined.contains("amd") || combined.contains("ryzen") {
@@ -198,14 +204,27 @@ pub fn parse_hii_questions(questions: &[HiiQuestion]) -> UefiSettings {
             if let Some(core_id) = extract_core_id(name) {
                 if let Ok(offset) = answer.parse::<i32>() {
                     co_offsets.insert(core_id, offset);
+                    tracing::debug!(core_id = core_id, offset = offset, "CO offset found");
                 }
             }
         }
 
         if agesa_version.is_none() && matches_agesa(name, help) {
             agesa_version = non_empty_value(answer)
-                .or_else(|| extract_agesa_from_text(name))
-                .or_else(|| extract_agesa_from_text(help));
+                .or_else(|| {
+                    let ver = extract_agesa_from_text(name);
+                    if let Some(ref v) = ver {
+                        tracing::debug!(source = "name", version = %v, "AGESA version extracted");
+                    }
+                    ver
+                })
+                .or_else(|| {
+                    let ver = extract_agesa_from_text(help);
+                    if let Some(ref v) = ver {
+                        tracing::debug!(source = "help", version = %v, "AGESA version extracted");
+                    }
+                    ver
+                });
         }
     }
 
