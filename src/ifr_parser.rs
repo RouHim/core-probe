@@ -15,6 +15,8 @@ const HII_PACKAGE_STRINGS: u8 = 0x04;
 
 // IFR Opcodes we care about
 const EFI_IFR_FORM_OP: u8 = 0x01;
+const EFI_IFR_SUBTITLE_OP: u8 = 0x02;
+const EFI_IFR_TEXT_OP: u8 = 0x03;
 const EFI_IFR_ONE_OF_OP: u8 = 0x05;
 const EFI_IFR_ONE_OF_OPTION_OP: u8 = 0x09;
 const EFI_IFR_CHECKBOX_OP: u8 = 0x06;
@@ -499,6 +501,23 @@ fn walk_form(
                     questions.push(q);
                 }
             }
+            EFI_IFR_SUBTITLE_OP | EFI_IFR_TEXT_OP => {
+                let prompt_string_id = read_u16(&op.data, 0).unwrap_or(0);
+                if prompt_string_id != 0 {
+                    let help_string_id = read_u16(&op.data, 2).unwrap_or(0);
+                    let name = resolve_string(string_table, prompt_string_id);
+                    let mut help = resolve_string(string_table, help_string_id);
+                    if help.is_empty() && op.opcode == EFI_IFR_TEXT_OP {
+                        let text_two_id = read_u16(&op.data, 4).unwrap_or(0);
+                        help = resolve_string(string_table, text_two_id);
+                    }
+                    questions.push(HiiQuestion {
+                        name,
+                        answer: String::new(),
+                        help,
+                    });
+                }
+            }
             _ => { /* skip end, varstore, suppress_if, etc. */ }
         }
 
@@ -717,6 +736,28 @@ mod test_helpers {
     /// Build a SUPPRESS_IF_OP (scope opener).
     pub fn make_suppress_if_op() -> Vec<u8> {
         make_opcode_header(0x0A, 2, true) // SUPPRESS_IF has scope
+    }
+
+    pub fn make_subtitle_op(prompt_string_id: u16, help_string_id: u16) -> Vec<u8> {
+        let total_len: u8 = 2 + 2 + 2 + 1; // header + prompt + help + flags = 7
+        let mut bytes = make_opcode_header(0x02, total_len, false);
+        bytes.extend_from_slice(&prompt_string_id.to_le_bytes());
+        bytes.extend_from_slice(&help_string_id.to_le_bytes());
+        bytes.push(0x00); // Flags
+        bytes
+    }
+
+    pub fn make_text_op(
+        prompt_string_id: u16,
+        help_string_id: u16,
+        text_two_string_id: u16,
+    ) -> Vec<u8> {
+        let total_len: u8 = 2 + 2 + 2 + 2; // header + prompt + help + text_two = 8
+        let mut bytes = make_opcode_header(0x03, total_len, false);
+        bytes.extend_from_slice(&prompt_string_id.to_le_bytes());
+        bytes.extend_from_slice(&help_string_id.to_le_bytes());
+        bytes.extend_from_slice(&text_two_string_id.to_le_bytes());
+        bytes
     }
 
     /// Build a FORMSET_OP (minimal: just GUID + title + help + flags).
@@ -1109,6 +1150,69 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn given_subtitle_with_agesa_version_when_parsing_then_emits_question() {
+        let mut form_data = Vec::new();
+        form_data.extend_from_slice(&make_formset_op());
+        form_data.extend_from_slice(&make_form_op(1, 0));
+        form_data.extend_from_slice(&make_subtitle_op(1, 2));
+        form_data.extend_from_slice(&make_end_op());
+        form_data.extend_from_slice(&make_end_op());
+
+        let string_data = make_string_package(&["AGESA Version: ComboV2PI 1.2.0.C", "AGESA help"]);
+        let hii_db = make_hii_db(&form_data, Some(&string_data));
+
+        let questions = parse_ifr_to_questions(&hii_db).expect("should emit SUBTITLE as question");
+
+        assert_eq!(questions.len(), 1);
+        assert_eq!(questions[0].name, "AGESA Version: ComboV2PI 1.2.0.C");
+        assert_eq!(questions[0].answer, "");
+        assert_eq!(questions[0].help, "AGESA help");
+    }
+
+    #[test]
+    fn given_text_op_when_parsing_then_emits_question_with_prompt() {
+        let mut form_data = Vec::new();
+        form_data.extend_from_slice(&make_formset_op());
+        form_data.extend_from_slice(&make_form_op(1, 0));
+        form_data.extend_from_slice(&make_text_op(1, 0, 2));
+        form_data.extend_from_slice(&make_end_op());
+        form_data.extend_from_slice(&make_end_op());
+
+        let string_data = make_string_package(&["BIOS Version", "1.0.0.5"]);
+        let hii_db = make_hii_db(&form_data, Some(&string_data));
+
+        let questions = parse_ifr_to_questions(&hii_db).expect("should emit TEXT_OP as question");
+
+        assert_eq!(questions.len(), 1);
+        assert_eq!(questions[0].name, "BIOS Version");
+        assert_eq!(questions[0].help, "1.0.0.5");
+    }
+
+    #[test]
+    fn given_subtitle_with_zero_prompt_id_when_parsing_then_skips_silently() {
+        let mut form_data = Vec::new();
+        form_data.extend_from_slice(&make_formset_op());
+        form_data.extend_from_slice(&make_form_op(1, 0));
+        form_data.extend_from_slice(&make_subtitle_op(0, 0));
+        form_data.extend_from_slice(&make_numeric_op(1, 0));
+        form_data.extend_from_slice(&make_end_op());
+        form_data.extend_from_slice(&make_end_op());
+
+        let string_data = make_string_package(&["Real Question"]);
+        let hii_db = make_hii_db(&form_data, Some(&string_data));
+
+        let questions =
+            parse_ifr_to_questions(&hii_db).expect("should skip SUBTITLE with zero prompt ID");
+
+        assert_eq!(
+            questions.len(),
+            1,
+            "only the real question should be emitted, SUBTITLE with zero prompt skipped"
+        );
+        assert_eq!(questions[0].name, "Real Question");
     }
 
     #[test]
