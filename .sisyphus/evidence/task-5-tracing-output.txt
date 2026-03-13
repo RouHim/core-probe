@@ -1,0 +1,17 @@
+
+running 1 test
+[2m2026-03-13T13:12:29.982752Z[0m [34mDEBUG[0m [2munstable_cpu_detector::ifr_parser[0m[2m:[0m form index built [3mforms[0m[2m=[0m1
+[2m2026-03-13T13:12:29.982783Z[0m [34mDEBUG[0m [2munstable_cpu_detector::ifr_parser[0m[2m:[0m processing IFR opcode [3mopcode[0m[2m=[0m"0x07" [3mdata_len[0m[2m=[0m15
+[2m2026-03-13T13:12:29.982796Z[0m [34mDEBUG[0m [2munstable_cpu_detector::ifr_parser[0m[2m:[0m emitting HII question [3mname[0m[2m=[0mTest [3manswer[0m[2m=[0m
+[2m2026-03-13T13:12:29.982804Z[0m [34mDEBUG[0m [2munstable_cpu_detector::ifr_parser[0m[2m:[0m processing IFR opcode [3mopcode[0m[2m=[0m"0x29" [3mdata_len[0m[2m=[0m0
+[2m2026-03-13T13:12:29.982812Z[0m [34mDEBUG[0m [2munstable_cpu_detector::ifr_parser[0m[2m:[0m processing IFR opcode [3mopcode[0m[2m=[0m"0x29" [3mdata_len[0m[2m=[0m0
+[2m2026-03-13T13:12:29.982823Z[0m [34mDEBUG[0m [2munstable_cpu_detector::ifr_parser[0m[2m:[0m IFR parsing complete [3mquestion_count[0m[2m=[0m1 [3mform_packages[0m[2m=[0m1 [3mstring_packages[0m[2m=[0m1
+test ifr_parser::tests::given_tracing_enabled_when_parsing_then_does_not_panic ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 205 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
