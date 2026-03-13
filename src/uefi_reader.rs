@@ -1,7 +1,8 @@
+use crate::hii_question::HiiQuestion;
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::IsTerminal;
-use uefisettings_backend_thrift::Question;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EscalationMethod {
@@ -120,7 +121,7 @@ fn extract_core_id(name: &str) -> Option<u32> {
 
 /// Parse HII questions into structured UefiSettings.
 /// This is the testable core of HII database interpretation.
-pub fn parse_hii_questions(questions: &[Question]) -> UefiSettings {
+pub fn parse_hii_questions(questions: &[HiiQuestion]) -> UefiSettings {
     let mut pbo_status: Option<String> = None;
     let mut ppt_limit: Option<String> = None;
     let mut tdc_limit: Option<String> = None;
@@ -224,29 +225,28 @@ pub fn parse_hii_questions(questions: &[Question]) -> UefiSettings {
 
 /// Read UEFI settings by extracting the HII database (requires root).
 pub fn read_uefi_settings_as_root() -> anyhow::Result<UefiSettings> {
-    use uefisettings::exports::{identify_machine, HiiBackend};
-    use uefisettings_backend_thrift::Backend;
+    use crate::hii_extractor;
+    use crate::ifr_parser;
 
-    let machine_info = identify_machine();
+    let bios_info = hii_extractor::read_bios_info();
     tracing::info!(
-        bios_vendor = %machine_info.bios_vendor,
-        bios_version = %machine_info.bios_version,
-        product_name = %machine_info.product_name,
+        bios_vendor = %bios_info.bios_vendor,
+        bios_version = %bios_info.bios_version,
+        product_name = %bios_info.product_name,
         "UEFI machine identified"
     );
 
-    if !machine_info.backend.contains(&Backend::Hii) {
+    if !hii_extractor::check_hii_available() {
         return Ok(UefiSettings::unavailable(
-            "HII backend not available on this machine (non-AMI BIOS or unsupported board)"
-                .to_string(),
+            "HII backend not available on this machine (HiiDB efivar not found)",
         ));
     }
 
-    let hii_db = HiiBackend::extract_db()
-        .map_err(|e| anyhow::anyhow!("Failed to extract HII database: {}", e))?;
+    let hii_db =
+        hii_extractor::extract_hii_db().with_context(|| "Failed to extract HII database")?;
 
-    let questions = HiiBackend::list_questions(&hii_db.db)
-        .map_err(|e| anyhow::anyhow!("Failed to list HII questions: {}", e))?;
+    let questions = ifr_parser::parse_ifr_to_questions(&hii_db)
+        .with_context(|| "Failed to parse IFR questions")?;
 
     tracing::info!(question_count = questions.len(), "HII questions loaded");
 
@@ -362,19 +362,17 @@ impl UefiSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uefisettings_backend_thrift::Question;
+    use crate::hii_question::HiiQuestion;
 
-    fn build_question(name: &str, answer: &str, help: &str) -> Question {
-        Question {
+    fn build_question(name: &str, answer: &str, help: &str) -> HiiQuestion {
+        HiiQuestion {
             name: name.to_string(),
             answer: answer.to_string(),
             help: help.to_string(),
-            options: Vec::new(),
-            ..Default::default()
         }
     }
 
-    fn build_test_questions() -> Vec<Question> {
+    fn build_test_questions() -> Vec<HiiQuestion> {
         vec![
             build_question(
                 "Precision Boost Overdrive",
