@@ -919,7 +919,7 @@ mod tests {
     }
 
     #[test]
-    fn given_agesa_name_without_separator_when_parsing_then_does_not_extract() {
+    fn given_agesa_name_without_separator_when_parsing_then_uses_full_name() {
         let questions = vec![build_question("AGESA ComboAm4v2PI", "", "")];
 
         let settings = parse_hii_questions(&questions);
