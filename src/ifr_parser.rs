@@ -26,6 +26,7 @@ const EFI_IFR_ORDERED_LIST_OP: u8 = 0x23;
 const EFI_IFR_FORM_SET_OP: u8 = 0x0E;
 const EFI_IFR_REF_OP: u8 = 0x0F;
 const EFI_IFR_END_OP: u8 = 0x29;
+const EFI_IFR_DEFAULT_OP: u8 = 0x5B;
 
 /// A single parsed IFR opcode with its raw bytes and metadata.
 #[derive(Debug, Clone)]
@@ -538,8 +539,9 @@ fn extract_oneof_answer(
 
     let mut depth = 1u32;
     let mut idx = start_index + 1;
-    let mut first_option: Option<String> = None;
-    let mut preferred_option: Option<String> = None;
+    let mut options: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut flagged_option: Option<String> = None;
+    let mut default_value: Option<Vec<u8>> = None;
 
     while idx < ops.len() && depth > 0 {
         let op = &ops[idx];
@@ -553,17 +555,31 @@ fn extract_oneof_answer(
         if depth == 1 && op.opcode == EFI_IFR_ONE_OF_OPTION_OP {
             let option_string_id = read_u16(&op.data, 0).unwrap_or(0);
             let option_flags = op.data.get(2).copied().unwrap_or(0);
+            let option_type = op.data.get(3).copied().unwrap_or(0);
             let option_text = resolve_string(string_table, option_string_id);
 
-            if first_option.is_none() && !option_text.is_empty() {
-                first_option = Some(option_text.clone());
+            let raw_value = extract_typed_value(&op.data, 4, option_type);
+
+            if !option_text.is_empty() {
+                options.push((option_text.clone(), raw_value));
             }
 
             if (option_flags & 0x10) != 0
                 || (option_flags & 0x20) != 0
                 || (option_flags & 0x30) != 0
             {
-                preferred_option = Some(option_text);
+                flagged_option = Some(option_text);
+            }
+        }
+
+        if depth == 1 && op.opcode == EFI_IFR_DEFAULT_OP {
+            let default_id = read_u16(&op.data, 0).unwrap_or(u16::MAX);
+            if default_id == 0x0000 {
+                let default_type = op.data.get(2).copied().unwrap_or(u8::MAX);
+                let val = extract_typed_value(&op.data, 3, default_type);
+                if !val.is_empty() {
+                    default_value = Some(val);
+                }
             }
         }
 
@@ -573,7 +589,40 @@ fn extract_oneof_answer(
         idx += 1;
     }
 
-    preferred_option.or(first_option)
+    if let Some(dv) = &default_value {
+        for (text, raw) in &options {
+            if raw == dv {
+                return Some(text.clone());
+            }
+        }
+    }
+
+    if let Some(text) = flagged_option {
+        return Some(text);
+    }
+
+    options.into_iter().next().map(|(text, _)| text)
+}
+
+fn extract_typed_value(data: &[u8], offset: usize, value_type: u8) -> Vec<u8> {
+    match value_type {
+        0x00 => data.get(offset).map(|&b| vec![b]).unwrap_or_default(),
+        0x01 => {
+            if offset + 2 <= data.len() {
+                data[offset..offset + 2].to_vec()
+            } else {
+                Vec::new()
+            }
+        }
+        0x02 => {
+            if offset + 4 <= data.len() {
+                data[offset..offset + 4].to_vec()
+            } else {
+                Vec::new()
+            }
+        }
+        _ => Vec::new(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -715,6 +764,25 @@ mod test_helpers {
         bytes.push(flags);
         bytes.push(0x00);
         bytes.push(0x00);
+        bytes
+    }
+
+    pub fn make_oneof_option_op_with_value(option_string_id: u16, flags: u8, value: u8) -> Vec<u8> {
+        let total_len: u8 = 2 + 2 + 1 + 1 + 1;
+        let mut bytes = make_opcode_header(0x09, total_len, false);
+        bytes.extend_from_slice(&option_string_id.to_le_bytes());
+        bytes.push(flags);
+        bytes.push(0x00); // Type = u8
+        bytes.push(value);
+        bytes
+    }
+
+    pub fn make_default_op(default_id: u16, value: u8) -> Vec<u8> {
+        let total_len: u8 = 2 + 2 + 1 + 1; // header + default_id + type + value
+        let mut bytes = make_opcode_header(0x5B, total_len, false);
+        bytes.extend_from_slice(&default_id.to_le_bytes());
+        bytes.push(0x00); // Type = u8
+        bytes.push(value);
         bytes
     }
 
@@ -1213,6 +1281,83 @@ mod tests {
             "only the real question should be emitted, SUBTITLE with zero prompt skipped"
         );
         assert_eq!(questions[0].name, "Real Question");
+    }
+
+    #[test]
+    fn given_oneof_with_default_op_when_extracting_answer_then_uses_default_value() {
+        let mut form_data = Vec::new();
+        form_data.extend_from_slice(&make_formset_op());
+        form_data.extend_from_slice(&make_form_op(1, 0));
+        form_data.extend_from_slice(&make_oneof_op(1, 2));
+        form_data.extend_from_slice(&make_oneof_option_op_with_value(3, 0x00, 0));
+        form_data.extend_from_slice(&make_oneof_option_op_with_value(4, 0x00, 1));
+        form_data.extend_from_slice(&make_oneof_option_op_with_value(5, 0x00, 2));
+        form_data.extend_from_slice(&make_default_op(0x0000, 1));
+        form_data.extend_from_slice(&make_end_op());
+        form_data.extend_from_slice(&make_end_op());
+        form_data.extend_from_slice(&make_end_op());
+
+        let string_data =
+            make_string_package(&["PBO Mode", "PBO Help", "Disabled", "Auto", "Enabled"]);
+        let hii_db = make_hii_db(&form_data, Some(&string_data));
+
+        let questions = parse_ifr_to_questions(&hii_db).expect("should use DEFAULT_OP value");
+
+        assert_eq!(questions.len(), 1);
+        assert_eq!(questions[0].answer, "Auto");
+    }
+
+    #[test]
+    fn given_oneof_with_default_op_and_flagged_option_when_extracting_then_default_op_wins() {
+        let mut form_data = Vec::new();
+        form_data.extend_from_slice(&make_formset_op());
+        form_data.extend_from_slice(&make_form_op(1, 0));
+        form_data.extend_from_slice(&make_oneof_op(1, 2));
+        form_data.extend_from_slice(&make_oneof_option_op_with_value(3, 0x10, 0));
+        form_data.extend_from_slice(&make_oneof_option_op_with_value(4, 0x00, 1));
+        form_data.extend_from_slice(&make_oneof_option_op_with_value(5, 0x00, 2));
+        form_data.extend_from_slice(&make_default_op(0x0000, 2));
+        form_data.extend_from_slice(&make_end_op());
+        form_data.extend_from_slice(&make_end_op());
+        form_data.extend_from_slice(&make_end_op());
+
+        let string_data =
+            make_string_package(&["PBO Mode", "PBO Help", "Disabled", "Auto", "Enabled"]);
+        let hii_db = make_hii_db(&form_data, Some(&string_data));
+
+        let questions =
+            parse_ifr_to_questions(&hii_db).expect("DEFAULT_OP should override flagged option");
+
+        assert_eq!(questions.len(), 1);
+        assert_eq!(
+            questions[0].answer, "Enabled",
+            "DEFAULT_OP value=2 should select 'Enabled' over flagged 'Disabled'"
+        );
+    }
+
+    #[test]
+    fn given_oneof_without_default_op_when_extracting_then_falls_back_to_flags() {
+        let mut form_data = Vec::new();
+        form_data.extend_from_slice(&make_formset_op());
+        form_data.extend_from_slice(&make_form_op(1, 0));
+        form_data.extend_from_slice(&make_oneof_op(1, 2));
+        form_data.extend_from_slice(&make_oneof_option_op_with_value(3, 0x00, 0));
+        form_data.extend_from_slice(&make_oneof_option_op_with_value(4, 0x10, 1));
+        form_data.extend_from_slice(&make_end_op());
+        form_data.extend_from_slice(&make_end_op());
+        form_data.extend_from_slice(&make_end_op());
+
+        let string_data = make_string_package(&["Setting", "Help", "Off", "On"]);
+        let hii_db = make_hii_db(&form_data, Some(&string_data));
+
+        let questions = parse_ifr_to_questions(&hii_db)
+            .expect("should fall back to flagged option without DEFAULT_OP");
+
+        assert_eq!(questions.len(), 1);
+        assert_eq!(
+            questions[0].answer, "On",
+            "without DEFAULT_OP, flagged option should be used"
+        );
     }
 
     #[test]
