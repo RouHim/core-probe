@@ -16,9 +16,11 @@ const HII_PACKAGE_STRINGS: u8 = 0x04;
 // IFR Opcodes we care about
 const EFI_IFR_FORM_OP: u8 = 0x01;
 const EFI_IFR_ONE_OF_OP: u8 = 0x05;
+const EFI_IFR_ONE_OF_OPTION_OP: u8 = 0x09;
 const EFI_IFR_CHECKBOX_OP: u8 = 0x06;
 const EFI_IFR_NUMERIC_OP: u8 = 0x07;
-const EFI_IFR_SUPPRESS_IF_OP: u8 = 0x0A;
+const EFI_IFR_STRING_OP: u8 = 0x1C;
+const EFI_IFR_ORDERED_LIST_OP: u8 = 0x23;
 const EFI_IFR_FORM_SET_OP: u8 = 0x0E;
 const EFI_IFR_REF_OP: u8 = 0x0F;
 const EFI_IFR_END_OP: u8 = 0x29;
@@ -33,6 +35,12 @@ struct IfrOp {
 
 /// Type alias for the split HII package result: (form_packages, string_packages)
 type HiiPackageSplit = (Vec<Vec<u8>>, Vec<Vec<u8>>);
+
+#[derive(Default)]
+struct HiiPackageGroup {
+    form_packages: Vec<Vec<u8>>,
+    string_packages: Vec<Vec<u8>>,
+}
 
 /// Type alias for the form index result: (form_id_to_ops_map, root_form_id)
 type FormIndex = (HashMap<u16, Vec<IfrOp>>, Option<u16>);
@@ -51,7 +59,77 @@ fn read_u16(data: &[u8], offset: usize) -> Option<u16> {
 
 /// Parse all HII packages from raw HII DB bytes, extracting form and string
 /// package payloads.
-fn split_hii_packages(hii_db: &[u8]) -> anyhow::Result<HiiPackageSplit> {
+fn split_hii_package_groups(hii_db: &[u8]) -> anyhow::Result<(Vec<HiiPackageGroup>, bool)> {
+    let mut groups: Vec<HiiPackageGroup> = Vec::new();
+    let mut offset = 0usize;
+
+    while offset + 20 <= hii_db.len() {
+        let list_len = u32::from_le_bytes([
+            hii_db[offset + 16],
+            hii_db[offset + 17],
+            hii_db[offset + 18],
+            hii_db[offset + 19],
+        ]) as usize;
+
+        if list_len < 20 {
+            break;
+        }
+        if offset + list_len > hii_db.len() {
+            tracing::debug!(
+                offset = offset,
+                list_len = list_len,
+                remaining = hii_db.len() - offset,
+                "truncated HII package list encountered, stopping parse"
+            );
+            break;
+        }
+
+        let mut group = HiiPackageGroup::default();
+        let mut pkg_offset = offset + 20;
+        let list_end = offset + list_len;
+
+        while pkg_offset + 4 <= list_end {
+            let header = u32::from_le_bytes([
+                hii_db[pkg_offset],
+                hii_db[pkg_offset + 1],
+                hii_db[pkg_offset + 2],
+                hii_db[pkg_offset + 3],
+            ]);
+            let pkg_len = (header & 0x00FF_FFFF) as usize;
+            let pkg_type = (header >> 24) as u8;
+
+            if pkg_len < 4 {
+                break;
+            }
+            if pkg_offset + pkg_len > list_end {
+                tracing::debug!(
+                    pkg_offset = pkg_offset,
+                    pkg_len = pkg_len,
+                    list_end = list_end,
+                    "truncated package in list, stopping list parse"
+                );
+                break;
+            }
+
+            let payload = &hii_db[pkg_offset + 4..pkg_offset + pkg_len];
+            match pkg_type {
+                HII_PACKAGE_FORMS => group.form_packages.push(payload.to_vec()),
+                HII_PACKAGE_STRINGS => group.string_packages.push(payload.to_vec()),
+                _ => {}
+            }
+
+            pkg_offset += pkg_len;
+        }
+
+        groups.push(group);
+        offset += list_len;
+    }
+
+    let has_groups = !groups.is_empty();
+    Ok((groups, has_groups))
+}
+
+fn split_flat_hii_packages(hii_db: &[u8]) -> anyhow::Result<HiiPackageSplit> {
     let mut form_packages: Vec<Vec<u8>> = Vec::new();
     let mut string_packages: Vec<Vec<u8>> = Vec::new();
     let mut offset = 0;
@@ -71,12 +149,13 @@ fn split_hii_packages(hii_db: &[u8]) -> anyhow::Result<HiiPackageSplit> {
             break;
         }
         if offset + length > hii_db.len() {
-            bail!(
-                "HII package at offset {} claims length {} but only {} bytes remain",
-                offset,
-                length,
-                hii_db.len() - offset
+            tracing::debug!(
+                offset = offset,
+                length = length,
+                remaining = hii_db.len() - offset,
+                "truncated HII package encountered in flat stream, stopping parse"
             );
+            break;
         }
 
         let payload = &hii_db[offset + 4..offset + length];
@@ -253,13 +332,23 @@ fn build_form_index(form_data: &[u8]) -> anyhow::Result<FormIndex> {
         };
 
         if offset + advance > form_data.len() {
-            bail!(
-                "IFR opcode 0x{:02X} at offset {} is truncated: need {} bytes but only {} remain",
-                opcode,
-                offset,
-                advance,
-                form_data.len() - offset
+            if offset == 0 {
+                bail!(
+                    "IFR opcode 0x{:02X} at offset {} is truncated: need {} bytes but only {} remain",
+                    opcode,
+                    offset,
+                    advance,
+                    form_data.len() - offset
+                );
+            }
+            tracing::debug!(
+                opcode = opcode,
+                offset = offset,
+                needed = advance,
+                remaining = form_data.len() - offset,
+                "truncated IFR opcode encountered, stopping form parse"
             );
+            break;
         }
 
         let data = if length > 2 {
@@ -341,8 +430,24 @@ fn extract_question(op: &IfrOp, string_table: &HashMap<u16, String>) -> Option<H
 ///   [8..10] VarStoreInfo    (u16)
 ///   [10]    QuestionFlags   (u8)
 ///   [11..13] FormId         (u16)  — the target form to navigate to
-fn extract_ref_form_id(op: &IfrOp) -> Option<u16> {
-    read_u16(&op.data, 11)
+fn extract_ref_form_ids(op: &IfrOp, form_index: &HashMap<u16, Vec<IfrOp>>) -> Vec<u16> {
+    let mut out = Vec::new();
+
+    if let Some(fid) = read_u16(&op.data, 11) {
+        if form_index.contains_key(&fid) {
+            out.push(fid);
+        }
+    }
+
+    for start in 0..op.data.len().saturating_sub(1) {
+        if let Some(fid) = read_u16(&op.data, start) {
+            if form_index.contains_key(&fid) && !out.contains(&fid) {
+                out.push(fid);
+            }
+        }
+    }
+
+    out
 }
 
 /// Recursively walk a form and its sub-forms (via REF_OP), collecting questions.
@@ -369,42 +474,87 @@ fn walk_form(
         let op = &ops[i];
 
         match op.opcode {
-            EFI_IFR_SUPPRESS_IF_OP => {
-                // Skip all opcodes inside this SUPPRESS_IF scope until matching END_OP.
-                if op.has_scope {
-                    let mut depth = 1u32;
-                    i += 1;
-                    while i < ops.len() && depth > 0 {
-                        if ops[i].has_scope {
-                            depth += 1;
-                        }
-                        if ops[i].opcode == EFI_IFR_END_OP {
-                            depth = depth.saturating_sub(1);
-                        }
-                        i += 1;
-                    }
-                    continue;
-                }
-            }
             EFI_IFR_REF_OP => {
-                if let Some(target_form_id) = extract_ref_form_id(op) {
+                for target_form_id in extract_ref_form_ids(op, form_index) {
                     let sub_questions =
                         walk_form(target_form_id, form_index, string_table, visited);
                     questions.extend(sub_questions);
                 }
             }
-            EFI_IFR_ONE_OF_OP | EFI_IFR_NUMERIC_OP | EFI_IFR_CHECKBOX_OP => {
+            EFI_IFR_ONE_OF_OP => {
+                if let Some(mut q) = extract_question(op, string_table) {
+                    if q.answer.is_empty() {
+                        if let Some(answer) = extract_oneof_answer(i, ops, string_table) {
+                            q.answer = answer;
+                        }
+                    }
+                    questions.push(q);
+                }
+            }
+            EFI_IFR_NUMERIC_OP
+            | EFI_IFR_CHECKBOX_OP
+            | EFI_IFR_STRING_OP
+            | EFI_IFR_ORDERED_LIST_OP => {
                 if let Some(q) = extract_question(op, string_table) {
                     questions.push(q);
                 }
             }
-            _ => { /* skip subtitles, text, end, varstore, etc. */ }
+            _ => { /* skip end, varstore, suppress_if, etc. */ }
         }
 
         i += 1;
     }
 
     questions
+}
+
+fn extract_oneof_answer(
+    start_index: usize,
+    ops: &[IfrOp],
+    string_table: &HashMap<u16, String>,
+) -> Option<String> {
+    if start_index >= ops.len() || !ops[start_index].has_scope {
+        return None;
+    }
+
+    let mut depth = 1u32;
+    let mut idx = start_index + 1;
+    let mut first_option: Option<String> = None;
+    let mut preferred_option: Option<String> = None;
+
+    while idx < ops.len() && depth > 0 {
+        let op = &ops[idx];
+
+        if op.opcode == EFI_IFR_END_OP {
+            depth = depth.saturating_sub(1);
+            idx += 1;
+            continue;
+        }
+
+        if depth == 1 && op.opcode == EFI_IFR_ONE_OF_OPTION_OP {
+            let option_string_id = read_u16(&op.data, 0).unwrap_or(0);
+            let option_flags = op.data.get(2).copied().unwrap_or(0);
+            let option_text = resolve_string(string_table, option_string_id);
+
+            if first_option.is_none() && !option_text.is_empty() {
+                first_option = Some(option_text.clone());
+            }
+
+            if (option_flags & 0x10) != 0
+                || (option_flags & 0x20) != 0
+                || (option_flags & 0x30) != 0
+            {
+                preferred_option = Some(option_text);
+            }
+        }
+
+        if op.has_scope {
+            depth += 1;
+        }
+        idx += 1;
+    }
+
+    preferred_option.or(first_option)
 }
 
 // ---------------------------------------------------------------------------
@@ -424,28 +574,49 @@ pub fn parse_ifr_to_questions(hii_db: &[u8]) -> anyhow::Result<Vec<HiiQuestion>>
         );
     }
 
-    let (form_packages, string_packages) =
-        split_hii_packages(hii_db).context("failed to split HII packages")?;
+    let (groups, used_lists) =
+        split_hii_package_groups(hii_db).context("failed to split HII package groups")?;
 
-    let string_table = build_string_table(&string_packages);
+    let package_groups = if used_lists {
+        groups
+    } else {
+        let (form_packages, string_packages) =
+            split_flat_hii_packages(hii_db).context("failed to split HII packages")?;
+        vec![HiiPackageGroup {
+            form_packages,
+            string_packages,
+        }]
+    };
 
     let mut all_questions = Vec::new();
+    let mut total_form_packages = 0usize;
+    let mut total_string_packages = 0usize;
 
-    for form_pkg in &form_packages {
-        let (form_index, root_form_id) =
-            build_form_index(form_pkg).context("failed to build form index")?;
+    for group in &package_groups {
+        let string_table = build_string_table(&group.string_packages);
+        total_string_packages += group.string_packages.len();
 
-        if let Some(root_id) = root_form_id {
-            // Walk ALL forms, starting from root and following REFs
-            let mut visited = HashSet::new();
-            let questions = walk_form(root_id, &form_index, &string_table, &mut visited);
-            all_questions.extend(questions);
+        for form_pkg in &group.form_packages {
+            total_form_packages += 1;
+            let (form_index, root_form_id) = match build_form_index(form_pkg) {
+                Ok(idx) => idx,
+                Err(e) => {
+                    tracing::debug!(error = %e, "failed to build form index for one form package; skipping package");
+                    continue;
+                }
+            };
 
-            // Also walk any forms not reachable from root (orphan forms)
-            for &fid in form_index.keys() {
-                if !visited.contains(&fid) {
-                    let orphan_questions = walk_form(fid, &form_index, &string_table, &mut visited);
-                    all_questions.extend(orphan_questions);
+            if let Some(root_id) = root_form_id {
+                let mut visited = HashSet::new();
+                let questions = walk_form(root_id, &form_index, &string_table, &mut visited);
+                all_questions.extend(questions);
+
+                for &fid in form_index.keys() {
+                    if !visited.contains(&fid) {
+                        let orphan_questions =
+                            walk_form(fid, &form_index, &string_table, &mut visited);
+                        all_questions.extend(orphan_questions);
+                    }
                 }
             }
         }
@@ -453,8 +624,8 @@ pub fn parse_ifr_to_questions(hii_db: &[u8]) -> anyhow::Result<Vec<HiiQuestion>>
 
     tracing::debug!(
         question_count = all_questions.len(),
-        form_packages = form_packages.len(),
-        string_packages = string_packages.len(),
+        form_packages = total_form_packages,
+        string_packages = total_string_packages,
         "IFR parsing complete"
     );
 
@@ -515,6 +686,16 @@ mod test_helpers {
         bytes.push(0x00); // QuestionFlags
         bytes.push(0x00); // Flags (NumSize8)
         bytes.extend_from_slice(&[0, 255, 1]); // min, max, step
+        bytes
+    }
+
+    pub fn make_oneof_option_op(option_string_id: u16, flags: u8) -> Vec<u8> {
+        let total_len: u8 = 2 + 2 + 1 + 1 + 1;
+        let mut bytes = make_opcode_header(0x09, total_len, false);
+        bytes.extend_from_slice(&option_string_id.to_le_bytes());
+        bytes.push(flags);
+        bytes.push(0x00);
+        bytes.push(0x00);
         bytes
     }
 
@@ -784,7 +965,7 @@ mod tests {
     }
 
     #[test]
-    fn given_suppress_if_scope_when_parsing_then_skips_suppressed_questions() {
+    fn given_suppress_if_scope_when_parsing_then_walks_into_suppressed_questions() {
         let mut form_data = Vec::new();
         form_data.extend_from_slice(&make_formset_op());
         form_data.extend_from_slice(&make_form_op(1, 0));
@@ -807,9 +988,279 @@ mod tests {
 
         assert_eq!(
             questions.len(),
-            1,
-            "only the visible question should be returned"
+            2,
+            "both visible and suppressed questions should be returned"
         );
-        assert_eq!(questions[0].name, "Visible Question");
+    }
+
+    #[test]
+    fn given_nested_suppress_if_when_parsing_then_extracts_all_questions() {
+        let mut form_data = Vec::new();
+        form_data.extend_from_slice(&make_formset_op());
+        form_data.extend_from_slice(&make_form_op(1, 0));
+
+        // Outer SUPPRESS_IF
+        form_data.extend_from_slice(&make_suppress_if_op());
+        form_data.extend_from_slice(&make_numeric_op(1, 0));
+        // Inner SUPPRESS_IF
+        form_data.extend_from_slice(&make_suppress_if_op());
+        form_data.extend_from_slice(&make_numeric_op(2, 0));
+        form_data.extend_from_slice(&make_end_op()); // end inner SUPPRESS_IF
+        form_data.extend_from_slice(&make_end_op()); // end outer SUPPRESS_IF
+
+        form_data.extend_from_slice(&make_end_op()); // end Form
+        form_data.extend_from_slice(&make_end_op()); // end FormSet
+
+        let string_data = make_string_package(&["Outer Question", "Inner Question"]);
+        let hii_db = make_hii_db(&form_data, Some(&string_data));
+
+        let questions =
+            parse_ifr_to_questions(&hii_db).expect("should walk into nested SUPPRESS_IF scopes");
+
+        assert_eq!(
+            questions.len(),
+            2,
+            "both outer and inner suppressed questions should be extracted"
+        );
+    }
+
+    #[test]
+    fn given_suppress_if_containing_ref_op_when_parsing_then_follows_ref() {
+        let mut form_data = Vec::new();
+        form_data.extend_from_slice(&make_formset_op());
+
+        // Form 1: SUPPRESS_IF wrapping a REF_OP to Form 2
+        form_data.extend_from_slice(&make_form_op(1, 0));
+        form_data.extend_from_slice(&make_suppress_if_op());
+        form_data.extend_from_slice(&make_ref_op(2));
+        form_data.extend_from_slice(&make_end_op()); // end SUPPRESS_IF
+        form_data.extend_from_slice(&make_end_op()); // end Form 1
+
+        // Form 2: contains a numeric question
+        form_data.extend_from_slice(&make_form_op(2, 0));
+        form_data.extend_from_slice(&make_numeric_op(1, 2));
+        form_data.extend_from_slice(&make_end_op()); // end Form 2
+
+        form_data.extend_from_slice(&make_end_op()); // end FormSet
+
+        let string_data = make_string_package(&["Hidden SubForm Question", "Help"]);
+        let hii_db = make_hii_db(&form_data, Some(&string_data));
+
+        let questions =
+            parse_ifr_to_questions(&hii_db).expect("should follow REF_OP inside SUPPRESS_IF");
+
+        assert!(
+            questions
+                .iter()
+                .any(|q| q.name == "Hidden SubForm Question"),
+            "should find question from sub-form referenced inside SUPPRESS_IF, got: {:?}",
+            questions
+        );
+    }
+
+    #[test]
+    fn given_suppress_if_wrapping_co_offsets_when_parsing_then_extracts_all_cores() {
+        let core_names: Vec<String> = (0..12)
+            .map(|i| format!("Core {} Curve Optimizer Offset", i))
+            .collect();
+        let help_texts: Vec<String> = (0..12).map(|i| format!("Help for core {}", i)).collect();
+
+        let mut all_strings: Vec<&str> = Vec::new();
+        for name in &core_names {
+            all_strings.push(name.as_str());
+        }
+        for help in &help_texts {
+            all_strings.push(help.as_str());
+        }
+
+        let string_data = make_string_package(&all_strings);
+
+        let mut form_data = Vec::new();
+        form_data.extend_from_slice(&make_formset_op());
+        form_data.extend_from_slice(&make_form_op(1, 0));
+
+        // SUPPRESS_IF wrapping all 12 core questions
+        form_data.extend_from_slice(&make_suppress_if_op());
+        for i in 0..12u16 {
+            let prompt_id = i + 1;
+            let help_id = i + 13;
+            form_data.extend_from_slice(&make_numeric_op(prompt_id, help_id));
+        }
+        form_data.extend_from_slice(&make_end_op()); // end SUPPRESS_IF
+
+        form_data.extend_from_slice(&make_end_op()); // end Form
+        form_data.extend_from_slice(&make_end_op()); // end FormSet
+
+        let hii_db = make_hii_db(&form_data, Some(&string_data));
+
+        let questions =
+            parse_ifr_to_questions(&hii_db).expect("should extract all 12 cores from SUPPRESS_IF");
+
+        assert_eq!(
+            questions.len(),
+            12,
+            "all 12 core questions should be extracted from SUPPRESS_IF scope"
+        );
+        for i in 0..12 {
+            let expected = format!("Core {} Curve Optimizer Offset", i);
+            assert!(
+                questions.iter().any(|q| q.name == expected),
+                "missing question for {}",
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn given_package_list_wrapped_hii_db_when_parsing_then_extracts_questions() {
+        let mut form_data = Vec::new();
+        form_data.extend_from_slice(&make_formset_op());
+        form_data.extend_from_slice(&make_form_op(1, 0));
+        form_data.extend_from_slice(&make_numeric_op(1, 2));
+        form_data.extend_from_slice(&make_end_op());
+        form_data.extend_from_slice(&make_end_op());
+
+        let string_data = make_string_package(&["Wrapped Question", "Wrapped Help"]);
+
+        let mut list_payload = Vec::new();
+        let form_pkg_len = 4 + form_data.len();
+        list_payload.extend_from_slice(&make_pkg_header(form_pkg_len as u32, 0x02));
+        list_payload.extend_from_slice(&form_data);
+        let str_pkg_len = 4 + string_data.len();
+        list_payload.extend_from_slice(&make_pkg_header(str_pkg_len as u32, 0x04));
+        list_payload.extend_from_slice(&string_data);
+
+        let package_list_len = 20 + list_payload.len();
+        let mut hii_db = Vec::new();
+        hii_db.extend_from_slice(&[0u8; 16]);
+        hii_db.extend_from_slice(&(package_list_len as u32).to_le_bytes());
+        hii_db.extend_from_slice(&list_payload);
+
+        let questions = parse_ifr_to_questions(&hii_db)
+            .expect("should parse package-list wrapped HII database successfully");
+
+        assert_eq!(questions.len(), 1);
+        assert_eq!(questions[0].name, "Wrapped Question");
+        assert_eq!(questions[0].help, "Wrapped Help");
+    }
+
+    #[test]
+    fn given_truncated_tail_after_valid_form_when_parsing_then_returns_partial_questions() {
+        let mut form_data = Vec::new();
+        form_data.extend_from_slice(&make_formset_op());
+        form_data.extend_from_slice(&make_form_op(1, 0));
+        form_data.extend_from_slice(&make_numeric_op(1, 2));
+        form_data.extend_from_slice(&make_end_op());
+        form_data.extend_from_slice(&make_end_op());
+        form_data.push(0xFE);
+        form_data.push(0x30);
+
+        let string_data = make_string_package(&["Question Before Truncation", "Help"]);
+        let hii_db = make_hii_db(&form_data, Some(&string_data));
+
+        let questions = parse_ifr_to_questions(&hii_db)
+            .expect("should return partial questions when malformed tail is encountered");
+
+        assert_eq!(questions.len(), 1);
+        assert_eq!(questions[0].name, "Question Before Truncation");
+    }
+
+    #[test]
+    fn given_multiple_package_lists_when_parsing_then_uses_per_list_string_tables() {
+        let mut amd_form_data = Vec::new();
+        amd_form_data.extend_from_slice(&make_formset_op());
+        amd_form_data.extend_from_slice(&make_form_op(1, 0));
+        amd_form_data.extend_from_slice(&make_numeric_op(1, 2));
+        amd_form_data.extend_from_slice(&make_end_op());
+        amd_form_data.extend_from_slice(&make_end_op());
+        let amd_strings = make_string_package(&["AMD Curve Optimizer", "AMD Help"]);
+
+        let mut intel_form_data = Vec::new();
+        intel_form_data.extend_from_slice(&make_formset_op());
+        intel_form_data.extend_from_slice(&make_form_op(1, 0));
+        intel_form_data.extend_from_slice(&make_numeric_op(1, 2));
+        intel_form_data.extend_from_slice(&make_end_op());
+        intel_form_data.extend_from_slice(&make_end_op());
+        let intel_strings = make_string_package(&["GT UNSLICE TDC Enable", "Intel Help"]);
+
+        fn make_package_list(form_data: &[u8], string_data: &[u8]) -> Vec<u8> {
+            let mut list_payload = Vec::new();
+            let form_pkg_len = 4 + form_data.len();
+            list_payload.extend_from_slice(&make_pkg_header(form_pkg_len as u32, 0x02));
+            list_payload.extend_from_slice(form_data);
+            let str_pkg_len = 4 + string_data.len();
+            list_payload.extend_from_slice(&make_pkg_header(str_pkg_len as u32, 0x04));
+            list_payload.extend_from_slice(string_data);
+
+            let mut out = Vec::new();
+            out.extend_from_slice(&[0u8; 16]);
+            out.extend_from_slice(&(20u32 + list_payload.len() as u32).to_le_bytes());
+            out.extend_from_slice(&list_payload);
+            out
+        }
+
+        let mut hii_db = Vec::new();
+        hii_db.extend_from_slice(&make_package_list(&amd_form_data, &amd_strings));
+        hii_db.extend_from_slice(&make_package_list(&intel_form_data, &intel_strings));
+
+        let questions = parse_ifr_to_questions(&hii_db)
+            .expect("should parse multiple package lists with per-list string tables");
+
+        assert!(questions.iter().any(|q| q.name == "AMD Curve Optimizer"));
+    }
+
+    #[test]
+    fn given_ref_with_target_formid_at_nonstandard_offset_when_parsing_then_still_follows_ref() {
+        let mut form_data = Vec::new();
+        form_data.extend_from_slice(&make_formset_op());
+
+        form_data.extend_from_slice(&make_form_op(1, 0));
+        let mut ref_op = make_ref_op(2);
+        ref_op[2 + 11] = 0;
+        ref_op[2 + 12] = 0;
+        ref_op[2] = 2;
+        ref_op[3] = 0;
+        form_data.extend_from_slice(&ref_op);
+        form_data.extend_from_slice(&make_end_op());
+
+        form_data.extend_from_slice(&make_form_op(2, 0));
+        form_data.extend_from_slice(&make_numeric_op(1, 2));
+        form_data.extend_from_slice(&make_end_op());
+        form_data.extend_from_slice(&make_end_op());
+
+        let string_data = make_string_package(&["CO Offset Core 0", "Curve optimizer offset"]);
+        let hii_db = make_hii_db(&form_data, Some(&string_data));
+
+        let questions = parse_ifr_to_questions(&hii_db)
+            .expect("should follow REF target formid found at alternate offset");
+
+        assert!(questions.iter().any(|q| q.name == "CO Offset Core 0"));
+    }
+
+    #[test]
+    fn given_oneof_question_with_options_when_parsing_then_uses_option_text_as_answer() {
+        let mut form_data = Vec::new();
+        form_data.extend_from_slice(&make_formset_op());
+        form_data.extend_from_slice(&make_form_op(1, 0));
+        form_data.extend_from_slice(&make_oneof_op(1, 2));
+        form_data.extend_from_slice(&make_oneof_option_op(3, 0x10));
+        form_data.extend_from_slice(&make_oneof_option_op(4, 0x00));
+        form_data.extend_from_slice(&make_end_op());
+        form_data.extend_from_slice(&make_end_op());
+        form_data.extend_from_slice(&make_end_op());
+
+        let string_data =
+            make_string_package(&["Precision Boost Overdrive", "PBO mode", "Auto", "Enabled"]);
+        let hii_db = make_hii_db(&form_data, Some(&string_data));
+
+        let questions = parse_ifr_to_questions(&hii_db)
+            .expect("should parse OneOf options into textual answer");
+
+        let pbo = questions
+            .iter()
+            .find(|q| q.name == "Precision Boost Overdrive")
+            .expect("PBO question should exist");
+
+        assert_eq!(pbo.answer, "Auto");
     }
 }
