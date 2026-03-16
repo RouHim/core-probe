@@ -75,6 +75,37 @@ fn parse_efivar_bytes(bytes: &[u8]) -> anyhow::Result<(u32, u32)> {
     Ok((length, address))
 }
 
+fn efi_variable_path(name: &str, guid: &str) -> String {
+    format!("/sys/firmware/efi/efivars/{}-{}", name, guid)
+}
+
+pub fn parse_efi_variable_data(raw_bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
+    if raw_bytes.len() < 4 {
+        anyhow::bail!(
+            "EFI variable too short: {} bytes (expected at least 4 for attribute header)",
+            raw_bytes.len()
+        );
+    }
+    Ok(raw_bytes[4..].to_vec())
+}
+
+pub fn read_efi_variable(name: &str, guid: &str) -> anyhow::Result<Vec<u8>> {
+    let path = efi_variable_path(name, guid);
+    let mut file =
+        File::open(&path).with_context(|| format!("Failed to open EFI variable at {}", path))?;
+
+    let mut contents = Vec::new();
+    file.read_to_end(&mut contents)
+        .with_context(|| format!("Failed to read EFI variable at {}", path))?;
+
+    parse_efi_variable_data(&contents)
+}
+
+pub fn efi_variable_exists(name: &str, guid: &str) -> bool {
+    let path = efi_variable_path(name, guid);
+    Path::new(&path).exists()
+}
+
 #[derive(Debug, Default)]
 pub struct BiosInfo {
     pub bios_vendor: String,
@@ -158,5 +189,51 @@ mod tests {
         assert!(!info.bios_vendor.is_empty());
         assert!(!info.bios_version.is_empty());
         assert!(!info.product_name.is_empty());
+    }
+
+    #[test]
+    fn given_valid_efi_variable_bytes_when_parsing_then_strips_attribute_header() {
+        // 4-byte header + 3 bytes of data
+        let bytes: [u8; 7] = [0x07, 0x00, 0x00, 0x00, 0xAA, 0xBB, 0xCC];
+
+        let result = parse_efi_variable_data(&bytes).unwrap();
+
+        assert_eq!(result, vec![0xAA, 0xBB, 0xCC]);
+    }
+
+    #[test]
+    fn given_short_efi_variable_when_parsing_then_returns_error() {
+        // Only 2 bytes — shorter than the required 4-byte header
+        let bytes: [u8; 2] = [0x07, 0x00];
+
+        let result = parse_efi_variable_data(&bytes);
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.to_lowercase().contains("too short"),
+            "Expected 'too short' in error message, got: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn given_empty_data_after_header_when_parsing_then_returns_empty_vec() {
+        // Exactly 4 bytes: the header, no data
+        let bytes: [u8; 4] = [0x00, 0x00, 0x00, 0x00];
+
+        let result = parse_efi_variable_data(&bytes).unwrap();
+
+        assert_eq!(result, Vec::<u8>::new());
+    }
+
+    #[test]
+    fn given_efi_variable_path_when_building_then_formats_correctly() {
+        let path = efi_variable_path("AOD_SETUP", "5ed15dc0-edef-4161-9151-6014c4cc630c");
+
+        assert_eq!(
+            path,
+            "/sys/firmware/efi/efivars/AOD_SETUP-5ed15dc0-edef-4161-9151-6014c4cc630c"
+        );
     }
 }
