@@ -288,7 +288,7 @@ pub fn parse_hii_questions(questions: &[HiiQuestion]) -> UefiSettings {
 }
 
 /// Read UEFI settings by extracting the HII database (requires root).
-pub fn read_uefi_settings_as_root() -> anyhow::Result<UefiSettings> {
+pub fn read_uefi_settings_as_root(physical_core_count: usize) -> anyhow::Result<UefiSettings> {
     use crate::hii_extractor;
     use crate::ifr_parser;
 
@@ -314,13 +314,21 @@ pub fn read_uefi_settings_as_root() -> anyhow::Result<UefiSettings> {
 
     tracing::info!(question_count = questions.len(), "HII questions loaded");
 
-    Ok(parse_hii_questions(&questions))
+    let mut settings = parse_hii_questions(&questions);
+
+    let aod_co = crate::co_reader::read_curve_optimizer(
+        settings.agesa_version.as_deref(),
+        physical_core_count,
+    );
+    merge_aod_co_into_settings(&mut settings, aod_co);
+
+    Ok(settings)
 }
 
-pub fn attempt_uefi_read_with_escalation() -> UefiSettings {
+pub fn attempt_uefi_read_with_escalation(physical_core_count: usize) -> UefiSettings {
     let method = detect_escalation_method(is_current_user_root(), pkexec_available());
     match method {
-        EscalationMethod::AlreadyRoot => read_uefi_settings_as_root()
+        EscalationMethod::AlreadyRoot => read_uefi_settings_as_root(physical_core_count)
             .unwrap_or_else(|e| UefiSettings::unavailable(format!("UEFI reading failed: {e}"))),
         EscalationMethod::Pkexec => {
             if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
@@ -330,6 +338,23 @@ pub fn attempt_uefi_read_with_escalation() -> UefiSettings {
             }
         }
         EscalationMethod::Unavailable { reason } => UefiSettings::unavailable(reason),
+    }
+}
+
+fn merge_aod_co_into_settings(settings: &mut UefiSettings, aod_co: Option<BTreeMap<u32, i32>>) {
+    match aod_co {
+        Some(map) => {
+            let core_count = map.len();
+            settings.curve_optimizer_offsets = Some(map);
+            tracing::info!(
+                co_source = "aod_setup",
+                cores = core_count,
+                "CO offsets merged from AOD_SETUP"
+            );
+        }
+        None => {
+            tracing::debug!("AOD_SETUP CO not available, preserving IFR-derived CO values");
+        }
     }
 }
 
@@ -984,5 +1009,72 @@ mod tests {
             .curve_optimizer_offsets
             .expect("curve_optimizer_offsets should be present");
         assert!(offsets.is_empty());
+    }
+
+    // ── AOD CO merge tests ──
+
+    #[test]
+    fn given_aod_co_with_values_when_merging_then_replaces_empty_settings() {
+        let mut settings = UefiSettings {
+            curve_optimizer_offsets: None,
+            ..Default::default()
+        };
+        let aod_co = Some(BTreeMap::from([(0u32, -15i32), (2u32, -30i32)]));
+
+        merge_aod_co_into_settings(&mut settings, aod_co);
+
+        assert_eq!(
+            settings.curve_optimizer_offsets,
+            Some(BTreeMap::from([(0, -15), (2, -30)]))
+        );
+    }
+
+    #[test]
+    fn given_aod_co_with_values_when_merging_then_replaces_ifr_values() {
+        let mut settings = UefiSettings {
+            curve_optimizer_offsets: Some(BTreeMap::new()),
+            ..Default::default()
+        };
+        let aod_co = Some(BTreeMap::from([(0u32, -15i32)]));
+
+        merge_aod_co_into_settings(&mut settings, aod_co);
+
+        assert_eq!(
+            settings.curve_optimizer_offsets,
+            Some(BTreeMap::from([(0, -15)]))
+        );
+    }
+
+    #[test]
+    fn given_aod_co_none_when_merging_then_preserves_existing() {
+        let mut settings = UefiSettings {
+            curve_optimizer_offsets: Some(BTreeMap::from([(0u32, -10i32)])),
+            ..Default::default()
+        };
+
+        merge_aod_co_into_settings(&mut settings, None);
+
+        assert_eq!(
+            settings.curve_optimizer_offsets,
+            Some(BTreeMap::from([(0, -10)]))
+        );
+    }
+
+    #[test]
+    fn given_aod_co_empty_map_when_merging_then_sets_empty() {
+        let mut settings = UefiSettings {
+            curve_optimizer_offsets: Some(BTreeMap::from([(0u32, -15i32)])),
+            ..Default::default()
+        };
+        let aod_co = Some(BTreeMap::new());
+
+        merge_aod_co_into_settings(&mut settings, aod_co);
+
+        assert_eq!(settings.curve_optimizer_offsets, Some(BTreeMap::new()));
+    }
+
+    #[test]
+    fn given_core_count_when_passed_to_read_settings_then_accepted() {
+        let _result = read_uefi_settings_as_root(12);
     }
 }

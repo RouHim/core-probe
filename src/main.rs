@@ -92,7 +92,14 @@ fn run() -> Result<i32> {
     let args: Args = argh::from_env();
 
     if args.uefi_only {
-        let settings = uefi_reader::attempt_uefi_read_with_escalation();
+        let physical_core_count = match detect_cpu_topology() {
+            Ok(topo) => topo.physical_core_count,
+            Err(e) => {
+                tracing::warn!(error = %e, "topology detection failed before UEFI read, defaulting to 16 cores");
+                16
+            }
+        };
+        let settings = uefi_reader::attempt_uefi_read_with_escalation(physical_core_count);
         let json = serde_json::to_string(&settings).unwrap_or_else(|_| {
             r#"{"available":false,"unavailable_reason":"JSON serialization failed"}"#.to_string()
         });
@@ -111,7 +118,8 @@ fn run() -> Result<i32> {
         logical_cpus = topology.logical_cpu_count,
         "CPU topology detected"
     );
-    let uefi_settings = uefi_reader::attempt_uefi_read_with_escalation();
+    let uefi_settings =
+        uefi_reader::attempt_uefi_read_with_escalation(topology.physical_core_count);
     if let Some(pbo) = &uefi_settings.pbo_status {
         info!(pbo_status = %pbo, "UEFI PBO status detected");
     }
