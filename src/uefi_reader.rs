@@ -71,7 +71,8 @@ fn matches_co(name: &str, help: &str) -> bool {
 
 fn matches_limits(name: &str, help: &str) -> bool {
     let combined = format!("{name} {help}").to_lowercase();
-    combined.contains("ppt")
+    combined.contains("pbo limits")
+        || combined.contains("ppt")
         || combined.contains("tdc")
         || combined.contains("edc")
         || combined.contains("power limit")
@@ -90,6 +91,15 @@ fn matches_cbs(name: &str, help: &str) -> bool {
 fn non_empty_value(value: &str) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn non_empty_non_auto_value(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("auto") {
         None
     } else {
         Some(trimmed.to_string())
@@ -148,7 +158,9 @@ pub fn parse_hii_questions(questions: &[HiiQuestion]) -> UefiSettings {
     let mut tdc_limit: Option<String> = None;
     let mut edc_limit: Option<String> = None;
     let mut co_offsets: BTreeMap<u32, i32> = BTreeMap::new();
+    let mut saw_co_setting = false;
     let mut agesa_version: Option<String> = None;
+    let mut pbo_limits_mode: Option<String> = None;
     let mut raw_settings: Vec<(String, String)> = Vec::new();
 
     tracing::debug!(
@@ -189,6 +201,9 @@ pub fn parse_hii_questions(questions: &[HiiQuestion]) -> UefiSettings {
 
         if matches_limits(name, help) {
             let name_lower = name.to_lowercase();
+            if pbo_limits_mode.is_none() && name_lower.contains("pbo limits") {
+                pbo_limits_mode = non_empty_value(answer);
+            }
             if name_lower.contains("ppt") && ppt_limit.is_none() {
                 ppt_limit = non_empty_value(answer);
             }
@@ -201,8 +216,9 @@ pub fn parse_hii_questions(questions: &[HiiQuestion]) -> UefiSettings {
         }
 
         if matches_co(name, help) {
+            saw_co_setting = true;
             if let Some(core_id) = extract_core_id(name) {
-                if let Ok(offset) = answer.parse::<i32>() {
+                if let Ok(offset) = answer.trim().parse::<i32>() {
                     co_offsets.insert(core_id, offset);
                     tracing::debug!(core_id = core_id, offset = offset, "CO offset found");
                 }
@@ -210,7 +226,7 @@ pub fn parse_hii_questions(questions: &[HiiQuestion]) -> UefiSettings {
         }
 
         if agesa_version.is_none() && matches_agesa(name, help) {
-            agesa_version = non_empty_value(answer)
+            agesa_version = non_empty_non_auto_value(answer)
                 .or_else(|| {
                     let ver = extract_agesa_from_text(name);
                     if let Some(ref v) = ver {
@@ -236,13 +252,17 @@ pub fn parse_hii_questions(questions: &[HiiQuestion]) -> UefiSettings {
             edc_limit,
         })
     } else {
-        None
+        pbo_limits_mode.map(|mode| PboLimits {
+            ppt_limit: Some(mode),
+            tdc_limit: None,
+            edc_limit: None,
+        })
     };
 
-    let co_map = if co_offsets.is_empty() {
-        None
-    } else {
+    let co_map = if saw_co_setting || !co_offsets.is_empty() {
         Some(co_offsets)
+    } else {
+        None
     };
 
     let available = !raw_settings.is_empty();
@@ -925,5 +945,44 @@ mod tests {
         let settings = parse_hii_questions(&questions);
 
         assert_eq!(settings.agesa_version, None);
+    }
+
+    #[test]
+    fn given_agesa_auto_before_colon_name_when_parsing_then_uses_colon_version() {
+        let questions = vec![
+            build_question("AGESA Version", "Auto", ""),
+            build_question("AGESA Version : ComboAm4v2PI 1207", "", ""),
+        ];
+
+        let settings = parse_hii_questions(&questions);
+
+        assert_eq!(
+            settings.agesa_version,
+            Some("ComboAm4v2PI 1207".to_string())
+        );
+    }
+
+    #[test]
+    fn given_pbo_limits_mode_only_when_parsing_then_populates_limits_with_mode() {
+        let questions = vec![build_question("PBO Limits", "Auto", "")];
+
+        let settings = parse_hii_questions(&questions);
+
+        let limits = settings.pbo_limits.expect("pbo_limits should be present");
+        assert_eq!(limits.ppt_limit, Some("Auto".to_string()));
+        assert_eq!(limits.tdc_limit, None);
+        assert_eq!(limits.edc_limit, None);
+    }
+
+    #[test]
+    fn given_curve_optimizer_present_but_no_per_core_values_when_parsing_then_returns_empty_map() {
+        let questions = vec![build_question("Curve Optimizer", "Disabled", "")];
+
+        let settings = parse_hii_questions(&questions);
+
+        let offsets = settings
+            .curve_optimizer_offsets
+            .expect("curve_optimizer_offsets should be present");
+        assert!(offsets.is_empty());
     }
 }
