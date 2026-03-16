@@ -1,5 +1,6 @@
 pub mod benchmark;
 pub mod co_decoder;
+pub mod co_heuristic;
 pub mod co_offsets;
 pub mod coordinator;
 pub mod cpu_topology;
