@@ -1,4 +1,5 @@
 pub mod benchmark;
+pub mod co_offsets;
 pub mod coordinator;
 pub mod cpu_topology;
 pub mod embedded;
