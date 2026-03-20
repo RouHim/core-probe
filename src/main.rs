@@ -455,6 +455,9 @@ fn print_startup_banner(
         println!("unstable-cpu-detector");
         println!("CPU: {}", topology.model_name);
         println!("{}", format_uefi_status_line(uefi_settings));
+        for co_line in format_co_offsets_lines(uefi_settings) {
+            println!("{co_line}");
+        }
         println!(
             "Config: duration={}/core iterations={} mode={} cores={} quiet={}",
             args.duration, args.iterations, mode_name, selected_cores, args.quiet
@@ -477,6 +480,26 @@ fn format_uefi_status_line(uefi_settings: Option<&uefi_reader::UefiSettings>) ->
         ),
         None => "UEFI Settings: Not checked".to_string(),
     }
+}
+
+fn format_co_offsets_lines(uefi_settings: Option<&uefi_reader::UefiSettings>) -> Vec<String> {
+    let Some(settings) = uefi_settings else {
+        return vec![];
+    };
+    if !settings.available {
+        return vec![];
+    }
+    let Some(offsets) = settings.curve_optimizer_offsets.as_ref() else {
+        return vec![];
+    };
+    if offsets.is_empty() {
+        return vec![];
+    }
+    let mut lines = vec!["CO offsets:".to_string()];
+    for (core, offset) in offsets {
+        lines.push(format!("  Core {core:>2}: {offset}"));
+    }
+    lines
 }
 
 #[cfg(test)]
@@ -517,6 +540,62 @@ mod tests {
         let line = format_uefi_status_line(Some(&settings));
 
         assert_eq!(line, "UEFI Settings: Unavailable (requires root)");
+    }
+
+    #[test]
+    fn given_available_uefi_with_co_offsets_when_formatting_then_shows_per_core_values() {
+        let settings = uefi_reader::UefiSettings {
+            available: true,
+            pbo_status: Some("Enabled".to_string()),
+            curve_optimizer_offsets: Some(BTreeMap::from([(0, -25), (1, -10), (5, -30)])),
+            ..Default::default()
+        };
+
+        let lines = format_co_offsets_lines(Some(&settings));
+
+        assert_eq!(
+            lines,
+            vec![
+                "CO offsets:",
+                "  Core  0: -25",
+                "  Core  1: -10",
+                "  Core  5: -30",
+            ]
+        );
+    }
+
+    #[test]
+    fn given_available_uefi_without_co_offsets_when_formatting_then_returns_empty() {
+        let settings = uefi_reader::UefiSettings {
+            available: true,
+            pbo_status: Some("Enabled".to_string()),
+            ..Default::default()
+        };
+
+        assert!(format_co_offsets_lines(Some(&settings)).is_empty());
+    }
+
+    #[test]
+    fn given_unavailable_uefi_when_formatting_co_lines_then_returns_empty() {
+        let settings = uefi_reader::UefiSettings::unavailable("requires root");
+
+        assert!(format_co_offsets_lines(Some(&settings)).is_empty());
+    }
+
+    #[test]
+    fn given_empty_co_offsets_when_formatting_then_returns_empty() {
+        let settings = uefi_reader::UefiSettings {
+            available: true,
+            curve_optimizer_offsets: Some(BTreeMap::new()),
+            ..Default::default()
+        };
+
+        assert!(format_co_offsets_lines(Some(&settings)).is_empty());
+    }
+
+    #[test]
+    fn given_no_uefi_settings_when_formatting_co_lines_then_returns_empty() {
+        assert!(format_co_offsets_lines(None).is_empty());
     }
 
     #[test]
