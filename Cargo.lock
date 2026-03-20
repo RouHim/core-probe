@@ -88,6 +88,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
+name = "core-probe"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "argh",
+ "core_affinity",
+ "ctrlc",
+ "nix 0.29.0",
+ "regex",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "core_affinity"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -663,25 +682,6 @@ name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
-
-[[package]]
-name = "unstable-cpu-detector"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "argh",
- "core_affinity",
- "ctrlc",
- "nix 0.29.0",
- "regex",
- "serde",
- "serde_json",
- "sysinfo",
- "tempfile",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
 
 [[package]]
 name = "uuid"

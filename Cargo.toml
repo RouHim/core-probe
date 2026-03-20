@@ -1,5 +1,5 @@
 [package]
-name = "unstable-cpu-detector"
+name = "core-probe"
 version = "0.1.0"
 edition = "2021"
 

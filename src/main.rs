@@ -78,7 +78,7 @@ fn main() {
     let exit_code = match run() {
         Ok(code) => code,
         Err(err) => {
-            error!(%err, "unstable-cpu-detector failed");
+            error!(%err, "core-probe failed");
             eprintln!("Error: {err:#}");
             EXIT_ERROR
         }
@@ -238,10 +238,7 @@ fn warn_if_root() {
 }
 
 fn check_temp_dir_writable() -> Result<()> {
-    let probe_dir = std::env::temp_dir().join(format!(
-        "unstable-cpu-detector-probe-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let probe_dir = std::env::temp_dir().join(format!("core-probe-probe-{}", uuid::Uuid::new_v4()));
 
     fs::create_dir_all(&probe_dir).with_context(|| {
         format!(
@@ -452,7 +449,7 @@ fn print_startup_banner(
     );
 
     if !args.quiet {
-        println!("unstable-cpu-detector");
+        println!("core-probe");
         println!("CPU: {}", topology.model_name);
         println!("{}", format_uefi_status_line(uefi_settings));
         for co_line in format_co_offsets_lines(uefi_settings) {
@@ -600,8 +597,8 @@ mod tests {
 
     #[test]
     fn given_no_args_when_running_then_uses_sensible_defaults() {
-        let args = Args::from_args(&["unstable-cpu-detector"], &[])
-            .expect("default args should parse successfully");
+        let args =
+            Args::from_args(&["core-probe"], &[]).expect("default args should parse successfully");
 
         assert_eq!(args.duration, "6m");
         assert_eq!(args.iterations, 3);
@@ -613,7 +610,7 @@ mod tests {
 
     #[test]
     fn given_help_flag_when_running_then_shows_usage() {
-        let result = Args::from_args(&["unstable-cpu-detector"], &["--help"])
+        let result = Args::from_args(&["core-probe"], &["--help"])
             .expect_err("--help should produce early-exit output");
         let help_text = result.output;
 
@@ -624,7 +621,7 @@ mod tests {
 
     #[test]
     fn given_duration_arg_when_parsing_then_sets_per_core_duration() {
-        let args = Args::from_args(&["unstable-cpu-detector"], &["--duration", "9"])
+        let args = Args::from_args(&["core-probe"], &["--duration", "9"])
             .expect("duration arg should parse successfully");
 
         assert_eq!(args.duration, "9");
@@ -632,7 +629,7 @@ mod tests {
 
     #[test]
     fn given_iterations_arg_when_parsing_then_sets_iteration_count() {
-        let args = Args::from_args(&["unstable-cpu-detector"], &["--iterations", "7"])
+        let args = Args::from_args(&["core-probe"], &["--iterations", "7"])
             .expect("iterations arg should parse successfully");
 
         assert_eq!(args.iterations, 7);
@@ -640,7 +637,7 @@ mod tests {
 
     #[test]
     fn given_quiet_flag_when_parsing_then_enables_machine_readable_output() {
-        let args = Args::from_args(&["unstable-cpu-detector"], &["--quiet"])
+        let args = Args::from_args(&["core-probe"], &["--quiet"])
             .expect("quiet arg should parse successfully");
 
         assert!(args.quiet);

@@ -1,8 +1,8 @@
-# AGENTS.md - unstable-cpu-detector
+# AGENTS.md - core-probe
 
 ## Project Purpose
 
-**unstable-cpu-detector** is a Linux CLI tool designed to identify unstable AMD CPU cores using the mprime (Prime95) stress test, inspired by CoreCycler. The tool systematically cycles through each CPU core, runs mprime stress tests, monitors for failures via system error logs, and generates a report identifying cores that fail stability tests.
+**core-probe** is a Linux CLI tool designed to identify unstable AMD CPU cores using the mprime (Prime95) stress test, inspired by CoreCycler. The tool systematically cycles through each CPU core, runs mprime stress tests, monitors for failures via system error logs, and generates a report identifying cores that fail stability tests.
 
 ## Constraints & Technical Requirements
 
@@ -93,7 +93,7 @@ ALL agents MUST adhere to these constraints without exception:
 - **mprime-latest/** — Embedded mprime v30.19 binary + libgmp.so (gitignored, embedded at build)
 
 ### Build Artifacts
-- **target/release/unstable-cpu-detector** — Final binary (stripped, LTO-optimized)
+- **target/release/core-probe** — Final binary (stripped, LTO-optimized)
 
 ## mprime Control Approach
 

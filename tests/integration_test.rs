@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
 
-const RELEASE_BINARY_PATH: &str = "./target/release/unstable-cpu-detector";
-const TEMP_DIR_PREFIX: &str = "unstable-cpu-detector-";
+const RELEASE_BINARY_PATH: &str = "./target/release/core-probe";
+const TEMP_DIR_PREFIX: &str = "core-probe-";
 
 #[test]
 fn given_binary_when_run_with_help_then_shows_usage() {
@@ -284,7 +284,7 @@ fn given_binary_when_run_quiet_then_outputs_result_line_only() {
         lines[0]
     );
     assert!(
-        !stdout.contains("unstable-cpu-detector") && !stdout.contains("Config:"),
+        !stdout.contains("core-probe") && !stdout.contains("Config:"),
         "quiet mode should not print startup banner"
     );
 

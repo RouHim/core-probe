@@ -34,7 +34,7 @@ impl ExtractedBinaries {
     ///
     /// # Example
     /// ```no_run
-    /// use unstable_cpu_detector::embedded::ExtractedBinaries;
+    /// use core_probe::embedded::ExtractedBinaries;
     ///
     /// let binaries = ExtractedBinaries::extract()?;
     /// // Use binaries.mprime_path...
@@ -108,7 +108,7 @@ impl ExtractedBinaries {
     fn create_temp_dir() -> Result<PathBuf> {
         let base = std::env::temp_dir();
         let suffix = uuid::Uuid::new_v4().to_string();
-        let temp_dir = base.join(format!("unstable-cpu-detector-{}", suffix));
+        let temp_dir = base.join(format!("core-probe-{}", suffix));
 
         fs::create_dir(&temp_dir)
             .with_context(|| format!("Failed to create temp directory: {}", temp_dir.display()))?;
@@ -172,7 +172,7 @@ mod tests {
                 .unwrap()
                 .to_str()
                 .unwrap()
-                .starts_with("unstable-cpu-detector-"),
+                .starts_with("core-probe-"),
             "Temp directory should have correct prefix"
         );
 
