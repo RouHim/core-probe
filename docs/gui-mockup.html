@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>core-probe — GUI Wireframe</title>
+  <style>
+    :root {
+      /* Dark Theme Defaults */
+      --bg-primary: #121212;
+      --bg-secondary: #1e1e1e;
+      --bg-tertiary: #2a2a2a;
+      
+      --text-primary: #ffffff;
+      --text-secondary: #b3b3b3;
+      --text-muted: #808080;
+      
+      --border-color: #333333;
+      --header-bg: #1a1a1a;
+      --status-bar-bg: #1a1a1a;
+      
+      --core-passed-bg: #2d5a27;
+      --core-failed-bg: #5a1a1a;
+      --core-testing-bg: #1a3a5a;
+      --core-skipped-bg: #5a4a00;
+      --core-idle-bg: #2a2a2a;
+      --core-interrupted-bg: #5a2d00;
+      
+      --core-passed-text: #e8f5e9;
+      --core-failed-text: #ffebee;
+      --core-testing-text: #e3f2fd;
+      --core-skipped-text: #fffde7;
+      --core-idle-text: #f5f5f5;
+      
+      --progress-fill: #4caf50;
+      --progress-bg: #333333;
+      
+      --log-bg: #000000;
+      --log-entry-error: #ff5252;
+      --log-entry-mce: #ffab40;
+      --log-entry-stable: #69f0ae;
+      --log-entry-default: #b3b3b3;
+      
+      --badge-pbo-bg: #311b92;
+      --badge-pbo-text: #b388ff;
+      
+      --button-bg: #333333;
+      --button-text: #ffffff;
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root {
+        /* Light Theme Overrides */
+        --bg-primary: #f5f5f5;
+        --bg-secondary: #ffffff;
+        --bg-tertiary: #e0e0e0;
+        
+        --text-primary: #000000;
+        --text-secondary: #424242;
+        --text-muted: #757575;
+        
+        --border-color: #cccccc;
+        --header-bg: #eeeeee;
+        --status-bar-bg: #eeeeee;
+        
+        --core-passed-bg: #c8e6c9;
+        --core-failed-bg: #ffcdd2;
+        --core-testing-bg: #bbdefb;
+        --core-skipped-bg: #fff9c4;
+        --core-idle-bg: #eeeeee;
+        --core-interrupted-bg: #ffe0b2;
+        
+        --core-passed-text: #1b5e20;
+        --core-failed-text: #b71c1c;
+        --core-testing-text: #0d47a1;
+        --core-skipped-text: #f57f17;
+        --core-idle-text: #424242;
+        
+        --progress-fill: #4caf50;
+        --progress-bg: #e0e0e0;
+        
+        --log-bg: #ffffff;
+        --log-entry-error: #d32f2f;
+        --log-entry-mce: #e65100;
+        --log-entry-stable: #2e7d32;
+        --log-entry-default: #424242;
+        
+        --badge-pbo-bg: #ede7f6;
+        --badge-pbo-text: #4527a0;
+        
+        --button-bg: #e0e0e0;
+        --button-text: #000000;
+      }
+    }
+
+    body {
+      background-color: var(--bg-primary);
+      color: var(--text-primary);
+      font-family: monospace;
+      margin: 0;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      box-sizing: border-box;
+      gap: 16px;
+    }
+
+    .flex-row { display: flex; flex-direction: row; }
+    .flex-col { display: flex; flex-direction: column; }
+    
+    .gap-4 { gap: 4px; }
+    .gap-8 { gap: 8px; }
+    .gap-16 { gap: 16px; }
+    
+    .p-4 { padding: 4px; }
+    .p-8 { padding: 8px; }
+    .p-16 { padding: 16px; }
+    
+    .border { border: 1px solid var(--border-color); }
+    .border-b { border-bottom: 1px solid var(--border-color); }
+    .border-b-dashed { border-bottom: 1px dashed var(--border-color); }
+    
+    .font-bold { font-weight: bold; }
+    .text-sm { font-size: 0.9em; }
+    .text-center { text-align: center; }
+    
+    .flex-1 { flex: 1; }
+    .flex-2 { flex: 2; }
+    
+    .items-center { align-items: center; }
+    .justify-between { justify-content: space-between; }
+    
+    .overflow-y-scroll { overflow-y: scroll; }
+    
+    .core-tile {
+      min-width: 200px;
+    }
+    .progress-container {
+      height: 12px;
+      background: var(--progress-bg);
+      flex: 1;
+      display: flex;
+      flex-direction: row;
+    }
+  </style>
+</head>
+<body>
+  <!-- Iced: Application > Column -->
+  <div id="app" class="flex-col gap-16" style="height: 100%;">
+    
+    <!-- Iced: Container[style=header_style] -->
+    <div class="flex-row gap-16 p-16 border items-center" style="background: var(--header-bg);">
+      <div class="font-bold">CPU: AMD Ryzen 9 5900X 12-Core Processor</div>
+      <div style="color: var(--text-muted)">|</div>
+      <div>AGESA: 1.2.0.7</div>
+      <div style="color: var(--text-muted)">|</div>
+      <div class="p-4" style="background: var(--badge-pbo-bg); color: var(--badge-pbo-text);">PBO: Enabled</div>
+      <div style="color: var(--text-muted)">|</div>
+      <div>PPT/TDC/EDC: 142W / 95A / 140A</div>
+    </div>
+
+    <!-- Iced: Row > [Column, Column] -->
+    <div class="flex-row gap-16 flex-1">
+      
+      <!-- Iced: Column > Container (Topology) -->
+      <div class="flex-col gap-16 border p-16 flex-2" style="background: var(--bg-secondary);">
+        <div class="font-bold border-b p-8" style="padding-top: 0;">CPU TOPOLOGY</div>
+        
+        <!-- Iced: Row (topology_row) -->
+        <div class="flex-row gap-16 flex-1">
+          
+          <!-- Iced: Column (ccd_group) -->
+          <div class="flex-col gap-8 flex-1">
+            <div class="text-center font-bold border-b-dashed p-4">CCD 0</div>
+            
+            <!-- Core 0 (Passed) -->
+            <div class="flex-col gap-4 p-8 border core-tile" style="background: var(--core-passed-bg); color: var(--core-passed-text);">
+              <div class="flex-row justify-between">
+                <span>Core 0</span><span>CO:-30</span>
+              </div>
+              <div>✓ STABLE</div>
+              <div class="flex-row gap-8 items-center">
+                <div class="progress-container">
+                  <div style="flex: 100; background: var(--progress-fill);"></div>
+                  <div style="flex: 0; background: var(--progress-bg);"></div>
+                </div>
+                <span>6:00</span>
+              </div>
+              <div class="text-sm" style="color: var(--text-secondary);">CPU: 0, 12</div>
+            </div>
+
+            <!-- Core 1 (Passed) -->
+            <div class="flex-col gap-4 p-8 border core-tile" style="background: var(--core-passed-bg); color: var(--core-passed-text);">
+              <div class="flex-row justify-between">
+                <span>Core 1</span><span>CO:-15</span>
+              </div>
+              <div>✓ STABLE</div>
+              <div class="flex-row gap-8 items-center">
+                <div class="progress-container">
+                  <div style="flex: 100; background: var(--progress-fill);"></div>
+                  <div style="flex: 0; background: var(--progress-bg);"></div>
+                </div>
+                <span>6:00</span>
+              </div>
+              <div class="text-sm" style="color: var(--text-secondary);">CPU: 1, 13</div>
+            </div>
+
+            <!-- Core 2 (Failed) -->
+            <div class="flex-col gap-4 p-8 border core-tile" style="background: var(--core-failed-bg); color: var(--core-failed-text);">
+              <div class="flex-row justify-between">
+                <span>Core 2</span><span>CO:-25</span>
+              </div>
+              <div>✗ UNSTABLE</div>
+              <div class="text-sm">ROUNDOFF @ 1344K</div>
+              <div class="flex-row gap-8 items-center">
+                <div class="progress-container">
+                  <div style="flex: 33; background: var(--progress-fill);"></div>
+                  <div style="flex: 67; background: var(--progress-bg);"></div>
+                </div>
+                <span>2:01</span>
+              </div>
+              <div class="text-sm" style="color: var(--text-secondary);">CPU: 2, 14</div>
+            </div>
+
+            <!-- Core 3 (Passed) -->
+            <div class="flex-col gap-4 p-8 border core-tile" style="background: var(--core-passed-bg); color: var(--core-passed-text);">
+              <div class="flex-row justify-between">
+                <span>Core 3</span><span>CO:-10</span>
+              </div>
+              <div>✓ STABLE</div>
+              <div class="flex-row gap-8 items-center">
+                <div class="progress-container">
+                  <div style="flex: 100; background: var(--progress-fill);"></div>
+                  <div style="flex: 0; background: var(--progress-bg);"></div>
+                </div>
+                <span>6:00</span>
+              </div>
+              <div class="text-sm" style="color: var(--text-secondary);">CPU: 3, 15</div>
+            </div>
+
+            <!-- Core 4 (Idle) -->
+            <div class="flex-col gap-4 p-8 border core-tile" style="background: var(--core-idle-bg); color: var(--core-idle-text);">
+              <div class="flex-row justify-between">
+                <span>Core 4</span><span>CO:-20</span>
+              </div>
+              <div>○ IDLE</div>
+              <div class="flex-row gap-8 items-center">
+                <div class="progress-container">
+                  <div style="flex: 0; background: var(--progress-fill);"></div>
+                  <div style="flex: 100; background: var(--progress-bg);"></div>
+                </div>
+                <span>0:00</span>
+              </div>
+              <div class="text-sm" style="color: var(--text-secondary);">CPU: 4, 16</div>
+            </div>
+
+            <!-- Core 5 (Idle) -->
+            <div class="flex-col gap-4 p-8 border core-tile" style="background: var(--core-idle-bg); color: var(--core-idle-text);">
+              <div class="flex-row justify-between">
+                <span>Core 5</span><span>CO:-5</span>
+              </div>
+              <div>○ IDLE</div>
+              <div class="flex-row gap-8 items-center">
+                <div class="progress-container">
+                  <div style="flex: 0; background: var(--progress-fill);"></div>
+                  <div style="flex: 100; background: var(--progress-bg);"></div>
+                </div>
+                <span>0:00</span>
+              </div>
+              <div class="text-sm" style="color: var(--text-secondary);">CPU: 5, 17</div>
+            </div>
+
+          </div>
+
+          <!-- Iced: Column (ccd_group) -->
+          <div class="flex-col gap-8 flex-1">
+            <div class="text-center font-bold border-b-dashed p-4">CCD 1</div>
+            
+            <!-- Core 8 (Passed) -->
+            <div class="flex-col gap-4 p-8 border core-tile" style="background: var(--core-passed-bg); color: var(--core-passed-text);">
+              <div class="flex-row justify-between">
+                <span>Core 8</span><span>CO:-30</span>
+              </div>
+              <div>✓ STABLE</div>
+              <div class="flex-row gap-8 items-center">
+                <div class="progress-container">
+                  <div style="flex: 100; background: var(--progress-fill);"></div>
+                  <div style="flex: 0; background: var(--progress-bg);"></div>
+                </div>
+                <span>6:00</span>
+              </div>
+              <div class="text-sm" style="color: var(--text-secondary);">CPU: 6, 18</div>
+            </div>
+
+            <!-- Core 9 (Failed) -->
+            <div class="flex-col gap-4 p-8 border core-tile" style="background: var(--core-failed-bg); color: var(--core-failed-text);">
+              <div class="flex-row justify-between">
+                <span>Core 9</span><span>CO:-30</span>
+              </div>
+              <div>✗ UNSTABLE</div>
+              <div class="text-sm">HW Failure @ 2048K</div>
+              <div class="flex-row gap-8 items-center">
+                <div class="progress-container">
+                  <div style="flex: 70; background: var(--progress-fill);"></div>
+                  <div style="flex: 30; background: var(--progress-bg);"></div>
+                </div>
+                <span>4:12</span>
+              </div>
+              <div class="text-sm" style="color: var(--text-secondary);">CPU: 7, 19</div>
+            </div>
+
+            <!-- Core 10 (Skipped) -->
+            <div class="flex-col gap-4 p-8 border core-tile" style="background: var(--core-skipped-bg); color: var(--core-skipped-text);">
+              <div class="flex-row justify-between">
+                <span>Core 10</span><span>CO:-10</span>
+              </div>
+              <div>⊘ SKIPPED</div>
+              <div class="flex-row gap-8 items-center">
+                <div class="progress-container">
+                  <div style="flex: 0; background: var(--progress-fill);"></div>
+                  <div style="flex: 100; background: var(--progress-bg);"></div>
+                </div>
+                <span>0:00</span>
+              </div>
+              <div class="text-sm" style="color: var(--text-secondary);">CPU: 8, 20</div>
+            </div>
+
+            <!-- Core 11 (Testing) -->
+            <div class="flex-col gap-4 p-8 border core-tile" style="background: var(--core-testing-bg); color: var(--core-testing-text);">
+              <div class="flex-row justify-between">
+                <span>Core 11</span><span>CO:-15</span>
+              </div>
+              <div>▶ TESTING</div>
+              <div class="flex-row gap-8 items-center">
+                <div class="progress-container">
+                  <div style="flex: 62; background: var(--progress-fill);"></div>
+                  <div style="flex: 38; background: var(--progress-bg);"></div>
+                </div>
+                <span>3:45</span>
+              </div>
+              <div class="text-sm" style="color: var(--text-secondary);">CPU: 9, 21</div>
+            </div>
+
+            <!-- Core 12 (Idle) -->
+            <div class="flex-col gap-4 p-8 border core-tile" style="background: var(--core-idle-bg); color: var(--core-idle-text);">
+              <div class="flex-row justify-between">
+                <span>Core 12</span><span>CO:-20</span>
+              </div>
+              <div>○ IDLE</div>
+              <div class="flex-row gap-8 items-center">
+                <div class="progress-container">
+                  <div style="flex: 0; background: var(--progress-fill);"></div>
+                  <div style="flex: 100; background: var(--progress-bg);"></div>
+                </div>
+                <span>0:00</span>
+              </div>
+              <div class="text-sm" style="color: var(--text-secondary);">CPU: 10, 22</div>
+            </div>
+
+            <!-- Core 13 (Idle) -->
+            <div class="flex-col gap-4 p-8 border core-tile" style="background: var(--core-idle-bg); color: var(--core-idle-text);">
+              <div class="flex-row justify-between">
+                <span>Core 13</span><span>CO:-25</span>
+              </div>
+              <div>○ IDLE</div>
+              <div class="flex-row gap-8 items-center">
+                <div class="progress-container">
+                  <div style="flex: 0; background: var(--progress-fill);"></div>
+                  <div style="flex: 100; background: var(--progress-bg);"></div>
+                </div>
+                <span>0:00</span>
+              </div>
+              <div class="text-sm" style="color: var(--text-secondary);">CPU: 11, 23</div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      <!-- Iced: Column > Container (Config & Progress) -->
+      <div class="flex-col gap-16 flex-1">
+        
+        <!-- Config -->
+        <div class="flex-col gap-8 border p-16" style="background: var(--bg-secondary);">
+          <div class="font-bold border-b p-8" style="padding-top: 0;">TEST CONFIG PANEL</div>
+          <div>Duration: 6m</div>
+          <div>Iterations: 3 (Current: 1/3)</div>
+          <div>Mode: SSE</div>
+          <div>Cores: all</div>
+          <div class="p-8 mt-8 border text-center" style="background: var(--button-bg); color: var(--button-text); margin-top: 16px;">[Start Test]</div>
+        </div>
+        
+        <!-- Progress -->
+        <div class="flex-col gap-8 border p-16" style="background: var(--bg-secondary);">
+          <div class="font-bold border-b p-8" style="padding-top: 0;">PROGRESS</div>
+          <div>7/12 cores tested</div>
+          <div>Core 11 testing (8th of 12)</div>
+          <div>Iteration 1/3</div>
+          <div class="flex-row gap-8 items-center" style="margin-top: 8px;">
+            <div class="flex-row border" style="flex: 1; height: 16px;">
+              <div style="flex: 58; background: var(--progress-fill);"></div>
+              <div style="flex: 42; background: var(--progress-bg);"></div>
+            </div>
+            <span>58%</span>
+          </div>
+        </div>
+        
+      </div>
+    </div>
+
+    <!-- Iced: Scrollable > Column -->
+    <div class="flex-col border p-8 overflow-y-scroll" style="background: var(--log-bg); height: 200px; min-height: 200px;">
+      <div style="color: var(--log-entry-default);">[14:23:01] Testing Core 0 — iteration 1/3</div>
+      <div style="color: var(--log-entry-stable);">[14:29:01] ✓ Core 0: STABLE</div>
+      <div style="color: var(--log-entry-default);">[14:29:02] Testing Core 8 — iteration 1/3</div>
+      <div style="color: var(--log-entry-stable);">[14:35:02] ✓ Core 8: STABLE</div>
+      <div style="color: var(--log-entry-default);">[14:35:03] Testing Core 1 — iteration 1/3</div>
+      <div style="color: var(--log-entry-stable);">[14:41:03] ✓ Core 1: STABLE</div>
+      <div style="color: var(--log-entry-default);">[14:41:04] Testing Core 9 — iteration 1/3</div>
+      <div style="color: var(--log-entry-error);">[14:45:16] ✗ Core 9: UNSTABLE — mprime: Hardware failure at 2048K FFT</div>
+      <div style="color: var(--log-entry-mce);">[14:45:16] MCE: Machine Check, Bank 5, CPU 7</div>
+      <div style="color: var(--log-entry-default);">[14:45:17] Testing Core 2 — iteration 1/3</div>
+      <div style="color: var(--log-entry-error);">[14:47:18] ✗ Core 2: UNSTABLE — mprime: ROUNDOFF at 1344K FFT</div>
+      <div style="color: var(--log-entry-default);">[14:47:19] Testing Core 10 — iteration 1/3</div>
+      <div style="color: var(--log-entry-default);">[14:47:19] ⊘ Core 10: SKIPPED</div>
+      <div style="color: var(--log-entry-default);">[14:47:20] Testing Core 3 — iteration 1/3</div>
+      <div style="color: var(--log-entry-stable);">[14:53:20] ✓ Core 3: STABLE</div>
+      <div style="color: var(--log-entry-default);">[14:53:21] Testing Core 11 — iteration 1/3 (in progress...)</div>
+    </div>
+
+    <!-- Iced: Container[style=status_bar_style] -->
+    <div class="flex-row gap-16 p-8 border items-center" style="background: var(--status-bar-bg);">
+      <div>Elapsed 01:12:03</div>
+      <div style="color: var(--text-muted)">|</div>
+      <div>ETA 02:30:00</div>
+      <div style="color: var(--text-muted)">|</div>
+      <div style="color: var(--log-entry-error); font-weight: bold;">2 unstable cores found</div>
+    </div>
+
+  </div>
+</body>
+</html>
