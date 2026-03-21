@@ -218,10 +218,10 @@ pub fn update(state: &mut CoreProbeApp, message: Message) -> Task<Message> {
             state.test_running = false;
         }
         Message::ThemeToggle => {
-            state.theme_mode = match state.theme_mode {
-                ThemeMode::Light => ThemeMode::Dark,
-                ThemeMode::Dark => ThemeMode::System,
-                ThemeMode::System => ThemeMode::Light,
+            state.theme_mode = if state.is_dark() {
+                ThemeMode::Light
+            } else {
+                ThemeMode::Dark
             };
         }
         Message::ConfigChanged(field) => match field {
@@ -600,7 +600,7 @@ mod tests {
     fn given_error_banner_when_dismiss_then_cleared() {
         let mut app = make_app();
         app.error_banner = Some(String::from("test error"));
-        update(&mut app, Message::DismissError);
+        let _ = update(&mut app, Message::DismissError);
         assert!(app.error_banner.is_none());
     }
 
@@ -608,7 +608,7 @@ mod tests {
     #[test]
     fn given_config_when_duration_changed_then_config_updated() {
         let mut app = make_app();
-        update(
+        let _ = update(
             &mut app,
             Message::ConfigChanged(ConfigField::Duration(String::from("10m"))),
         );
@@ -619,21 +619,35 @@ mod tests {
     #[test]
     fn given_config_when_iterations_changed_then_config_updated() {
         let mut app = make_app();
-        update(&mut app, Message::ConfigChanged(ConfigField::Iterations(5)));
+        let _ = update(&mut app, Message::ConfigChanged(ConfigField::Iterations(5)));
         assert_eq!(app.config.iterations, 5);
     }
 
-    /// BDD: Given dark theme, when ThemeToggle three times, then cycles Dark→System→Light→Dark
+    /// BDD: Given dark theme, when ThemeToggle twice, then toggles Dark→Light→Dark
     #[test]
-    fn given_dark_theme_when_toggled_then_cycles_correctly() {
+    fn given_dark_theme_when_toggled_then_switches_between_light_and_dark() {
         let mut app = make_app();
         app.theme_mode = ThemeMode::Dark;
-        update(&mut app, Message::ThemeToggle);
-        assert!(matches!(app.theme_mode, ThemeMode::System));
-        update(&mut app, Message::ThemeToggle);
+        let _ = update(&mut app, Message::ThemeToggle);
         assert!(matches!(app.theme_mode, ThemeMode::Light));
-        update(&mut app, Message::ThemeToggle);
+        let _ = update(&mut app, Message::ThemeToggle);
         assert!(matches!(app.theme_mode, ThemeMode::Dark));
+    }
+
+    /// BDD: Given system theme mode, when ThemeToggle, then switches to explicit opposite of effective theme
+    #[test]
+    fn given_system_theme_when_toggled_then_switches_to_explicit_opposite_mode() {
+        let mut app = make_app();
+        app.theme_mode = ThemeMode::System;
+
+        let was_dark = app.is_dark();
+        let _ = update(&mut app, Message::ThemeToggle);
+
+        if was_dark {
+            assert!(matches!(app.theme_mode, ThemeMode::Light));
+        } else {
+            assert!(matches!(app.theme_mode, ThemeMode::Dark));
+        }
     }
 
     /// BDD: Given LogMessage event, when processed, then log entry appended with correct message
@@ -726,7 +740,7 @@ mod tests {
     #[test]
     fn given_config_when_mode_changed_then_config_updated() {
         let mut app = make_app();
-        update(
+        let _ = update(
             &mut app,
             Message::ConfigChanged(ConfigField::Mode(StressTestMode::AVX)),
         );
@@ -737,7 +751,7 @@ mod tests {
     #[test]
     fn given_config_when_cores_changed_then_config_updated() {
         let mut app = make_app();
-        update(
+        let _ = update(
             &mut app,
             Message::ConfigChanged(ConfigField::Cores(String::from("0,1,2"))),
         );
