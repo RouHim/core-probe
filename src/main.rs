@@ -7,6 +7,10 @@ pub mod coordinator;
 pub mod cpu_topology;
 pub mod embedded;
 pub mod error_parser;
+pub mod gui;
+pub mod gui_events;
+pub mod gui_theme;
+pub mod gui_widgets;
 pub mod hii_extractor;
 pub mod hii_question;
 pub mod ifr_parser;
@@ -89,6 +93,12 @@ fn main() {
 
 #[instrument]
 fn run() -> Result<i32> {
+    // GUI branch: no CLI args → launch GUI
+    if std::env::args().len() == 1 {
+        gui::run_gui().map_err(|e| anyhow::anyhow!("GUI error: {e}"))?;
+        return Ok(EXIT_STABLE);
+    }
+
     let args: Args = argh::from_env();
 
     if args.uefi_only {
@@ -156,8 +166,14 @@ fn run() -> Result<i32> {
         guard.register_temp_dir(extracted.temp_dir.clone());
     }
 
-    let run_result =
-        run_coordinator_and_report(&args, &topology, &extracted, core_filter, &uefi_settings);
+    let run_result = run_coordinator_and_report(
+        &args,
+        &topology,
+        &extracted,
+        core_filter,
+        &uefi_settings,
+        mode,
+    );
     let cleanup_result = {
         let mut guard = cleanup
             .lock()
@@ -170,25 +186,39 @@ fn run() -> Result<i32> {
     Ok(exit_code)
 }
 
-#[instrument(skip(args, topology, extracted, core_filter, uefi_settings))]
+#[instrument(skip(args, topology, extracted, core_filter, uefi_settings, mode))]
 fn run_coordinator_and_report(
     args: &Args,
     topology: &CpuTopology,
     extracted: &ExtractedBinaries,
     core_filter: Option<Vec<u32>>,
     uefi_settings: &uefi_reader::UefiSettings,
+    mode: StressTestMode,
 ) -> Result<i32> {
     let duration_per_core = parse_duration(&args.duration).context("invalid --duration value")?;
+    let (event_sender, printer_handle) = if args.quiet {
+        (None, None)
+    } else {
+        let (sender, receiver) = gui_events::create_event_channel();
+        let handle = gui_events::create_cli_event_printer(receiver);
+        (Some(sender), Some(handle))
+    };
     let coordinator = Coordinator::new(
         duration_per_core,
         args.iterations,
         core_filter,
         args.quiet,
         args.bail,
+        event_sender,
+        Some(mode),
     );
     let results = coordinator
         .run(topology, extracted)
         .context("coordinator run failed")?;
+    drop(coordinator);
+    if let Some(handle) = printer_handle {
+        let _ = handle.join();
+    }
 
     let report = StabilityReport::new(&results, topology, Some(uefi_settings))
         .with_quiet(args.quiet)

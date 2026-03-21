@@ -30,6 +30,14 @@ pub fn is_shutdown_requested() -> bool {
     SHUTDOWN_REQUESTED.load(Ordering::SeqCst)
 }
 
+pub fn request_shutdown() {
+    SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
+}
+
+pub fn reset_shutdown() {
+    SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
+}
+
 /// Register Ctrl+C (SIGINT) handler.
 ///
 /// This should be called once at program startup.

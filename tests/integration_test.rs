@@ -100,6 +100,8 @@ fn given_binary_when_run_on_amd_then_detects_cpu_topology() {
     let baseline_temp_dirs = list_detector_temp_dirs().expect("failed to read baseline temp dirs");
 
     let child = Command::new(binary_path())
+        .arg("--duration")
+        .arg("0s")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()

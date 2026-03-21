@@ -1,6 +1,5 @@
 use std::collections::BTreeSet;
 use std::fs;
-use std::io::Write;
 use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -11,8 +10,9 @@ use tracing::{info, info_span, instrument, warn};
 use crate::cpu_topology::CpuTopology;
 use crate::embedded::ExtractedBinaries;
 use crate::error_parser::{ErrorParser, MprimeError, MprimeErrorType};
+use crate::gui_events::{EventSender, LogLevel, TestEvent};
 use crate::mce_monitor::{MceError, MceMonitor};
-use crate::mprime_config::MprimeConfig;
+use crate::mprime_config::{MprimeConfig, StressTestMode};
 use crate::mprime_runner::MprimeRunner;
 use crate::signal_handler;
 
@@ -23,6 +23,8 @@ const INITIAL_PIN_DELAY: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreStatus {
+    Idle,
+    Testing,
     Passed,
     Failed,
     Skipped,
@@ -54,6 +56,8 @@ pub struct Coordinator {
     core_filter: Option<Vec<u32>>,
     quiet: bool,
     bail: bool,
+    event_sender: Option<EventSender>,
+    stress_mode: Option<StressTestMode>,
 }
 
 trait RunnerControl {
@@ -137,6 +141,8 @@ impl Coordinator {
         core_filter: Option<Vec<u32>>,
         quiet: bool,
         bail: bool,
+        event_sender: Option<EventSender>,
+        stress_mode: Option<StressTestMode>,
     ) -> Self {
         Self {
             duration_per_core,
@@ -144,6 +150,8 @@ impl Coordinator {
             core_filter,
             quiet,
             bail,
+            event_sender,
+            stress_mode,
         }
     }
 
@@ -192,6 +200,9 @@ impl Coordinator {
             .context("failed to start MCE monitor thread")?;
 
         let all_cores: Vec<u32> = order_cores_alternate(&topology.core_map);
+        self.emit_event(TestEvent::TestStarted {
+            total_cores: all_cores.len(),
+        });
         let allowed_cores: Option<BTreeSet<u32>> = self
             .core_filter
             .as_ref()
@@ -238,21 +249,20 @@ impl Coordinator {
 
                 if result.status == CoreStatus::Interrupted {
                     interrupted = true;
-                    if !self.quiet {
-                        print_intermediate_result(&result);
-                    }
+                    self.emit_intermediate_result(&result);
+                    self.emit_event(TestEvent::CoreTestCompleted {
+                        result: result.clone(),
+                    });
                     results.push(result);
                     break 'iterations;
                 }
 
                 let failed = result.status == CoreStatus::Failed;
+                self.emit_intermediate_result(&result);
+                self.emit_event(TestEvent::CoreTestCompleted {
+                    result: result.clone(),
+                });
                 results.push(result);
-
-                if !self.quiet {
-                    if let Some(last) = results.last() {
-                        print_intermediate_result(last);
-                    }
-                }
 
                 if self.bail && failed {
                     interrupted = true;
@@ -260,17 +270,26 @@ impl Coordinator {
                 }
             }
             completed_iterations += 1;
+            self.emit_event(TestEvent::IterationCompleted {
+                iteration: iteration + 1,
+                total: self.iteration_count,
+            });
             info!(iteration = iteration + 1, "completed iteration");
         }
 
         monitor.stop();
 
-        Ok(CycleResults {
+        let cycle_results = CycleResults {
             results,
             total_duration: start_time.elapsed(),
             iterations_completed: completed_iterations,
             interrupted,
-        })
+        };
+        self.emit_event(TestEvent::TestCompleted {
+            results: cycle_results.clone(),
+        });
+
+        Ok(cycle_results)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -314,15 +333,18 @@ impl Coordinator {
             .position(|&c| c == core_id)
             .unwrap_or(0)
             + 1;
-        if !self.quiet {
-            println!(
+        self.emit_event(TestEvent::CoreTestStarting { core_id, iteration });
+        self.emit_event(TestEvent::LogMessage {
+            level: LogLevel::Default,
+            message: format!(
                 "[{}/{}] Testing core {} \u{2014} iteration {}/{}",
                 core_index, total_cores, core_id, iteration, self.iteration_count,
-            );
-            let _ = std::io::stdout().flush();
-        }
+            ),
+        });
+
+        let config = self.stress_mode.as_ref().map(MprimeConfig::from_mode);
         runner
-            .start(core_id, &working_dir, None)
+            .start(core_id, &working_dir, config.as_ref())
             .with_context(|| format!("failed to start mprime on physical core {core_id}"))?;
 
         // Wait for mprime to spawn worker threads, then pin all threads to the target CPU.
@@ -472,6 +494,37 @@ impl Coordinator {
             iterations_completed: iteration,
         })
     }
+
+    fn emit_event(&self, event: TestEvent) {
+        if self.quiet && self.event_sender.is_none() {
+            return;
+        }
+
+        if let Some(sender) = &self.event_sender {
+            let _ = sender.send(event);
+        }
+    }
+
+    fn emit_intermediate_result(&self, result: &CoreTestResult) {
+        if let Some(message) = format_intermediate_result(result) {
+            let level = match result.status {
+                CoreStatus::Passed => LogLevel::Stable,
+                CoreStatus::Failed => {
+                    if !result.mce_errors.is_empty() {
+                        LogLevel::Mce
+                    } else {
+                        LogLevel::Error
+                    }
+                }
+                CoreStatus::Interrupted
+                | CoreStatus::Idle
+                | CoreStatus::Testing
+                | CoreStatus::Skipped => LogLevel::Default,
+            };
+
+            self.emit_event(TestEvent::LogMessage { level, message });
+        }
+    }
 }
 
 /// Orders physical core IDs using CoreCycler's "alternate" strategy.
@@ -558,7 +611,7 @@ fn is_core_selected(core_id: u32, filter: Option<&BTreeSet<u32>>) -> bool {
 /// Returns `None` for skipped cores (no output desired).
 fn format_intermediate_result(result: &CoreTestResult) -> Option<String> {
     match result.status {
-        CoreStatus::Skipped => None,
+        CoreStatus::Idle | CoreStatus::Testing | CoreStatus::Skipped => None,
         CoreStatus::Passed => Some(format!("  \u{2713} Core {:2}: STABLE", result.core_id)),
         CoreStatus::Interrupted => {
             Some(format!("  \u{2298} Core {:2}: INTERRUPTED", result.core_id))
@@ -617,25 +670,6 @@ fn format_error_summary(result: &CoreTestResult) -> String {
     }
 }
 
-fn print_intermediate_result(result: &CoreTestResult) {
-    if let Some(line) = format_intermediate_result(result) {
-        let use_colors = std::io::IsTerminal::is_terminal(&std::io::stdout());
-        let (color, reset) = if use_colors {
-            let c = match result.status {
-                CoreStatus::Passed => "\x1b[32m",
-                CoreStatus::Failed => "\x1b[31m",
-                CoreStatus::Interrupted => "\x1b[33m",
-                CoreStatus::Skipped => "",
-            };
-            let r = if c.is_empty() { "" } else { "\x1b[0m" };
-            (c, r)
-        } else {
-            ("", "")
-        };
-        println!("{color}{line}{reset}");
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::cell::{Cell, RefCell};
@@ -653,7 +687,8 @@ mod tests {
     #[test]
     fn given_core_list_when_starting_cycle_then_tests_each_core_in_alternate_order() -> Result<()> {
         let fixture = TestFixture::new(&[(0, vec![0]), (1, vec![1]), (2, vec![2])])?;
-        let coordinator = Coordinator::new(Duration::from_secs(1), 1, None, false, false);
+        let coordinator =
+            Coordinator::new(Duration::from_secs(1), 1, None, false, false, None, None);
         let mut runner = FakeRunner::default();
         let mut parser = FakeParser::default();
         let mut monitor = FakeMceMonitor::default();
@@ -682,7 +717,8 @@ mod tests {
     #[test]
     fn given_duration_per_core_when_testing_then_runs_for_specified_time() -> Result<()> {
         let fixture = TestFixture::new(&[(0, vec![0])])?;
-        let coordinator = Coordinator::new(Duration::from_secs(3), 1, None, false, false);
+        let coordinator =
+            Coordinator::new(Duration::from_secs(3), 1, None, false, false, None, None);
         let mut runner = FakeRunner::default();
         let mut parser = FakeParser::default();
         let mut monitor = FakeMceMonitor::default();
@@ -707,7 +743,8 @@ mod tests {
     fn given_error_detected_when_testing_core_then_marks_core_as_failed() -> Result<()> {
         let fixture = TestFixture::new(&[(0, vec![0])])?;
         fixture.write_results(1, 0, "FATAL ERROR: test failure\n")?;
-        let coordinator = Coordinator::new(Duration::from_secs(6), 1, None, false, false);
+        let coordinator =
+            Coordinator::new(Duration::from_secs(6), 1, None, false, false, None, None);
         let mut runner = FakeRunner::default();
         let mut parser = FakeParser::default();
         let mut monitor = FakeMceMonitor::default();
@@ -732,7 +769,8 @@ mod tests {
     #[test]
     fn given_shutdown_signal_when_mid_cycle_then_stops_gracefully() -> Result<()> {
         let fixture = TestFixture::new(&[(0, vec![0]), (1, vec![1])])?;
-        let coordinator = Coordinator::new(Duration::from_secs(6), 1, None, false, false);
+        let coordinator =
+            Coordinator::new(Duration::from_secs(6), 1, None, false, false, None, None);
         let mut runner = FakeRunner::default();
         let mut parser = FakeParser::default();
         let mut monitor = FakeMceMonitor::default();
@@ -760,7 +798,8 @@ mod tests {
     #[test]
     fn given_all_cores_tested_when_complete_then_returns_full_results() -> Result<()> {
         let fixture = TestFixture::new(&[(0, vec![0]), (1, vec![1]), (2, vec![2])])?;
-        let coordinator = Coordinator::new(Duration::from_secs(1), 1, None, false, false);
+        let coordinator =
+            Coordinator::new(Duration::from_secs(1), 1, None, false, false, None, None);
         let mut runner = FakeRunner::default();
         let mut parser = FakeParser::default();
         let mut monitor = FakeMceMonitor::default();
@@ -800,7 +839,8 @@ mod tests {
     #[test]
     fn given_iteration_count_when_configured_then_repeats_full_cycle() -> Result<()> {
         let fixture = TestFixture::new(&[(0, vec![0]), (1, vec![1])])?;
-        let coordinator = Coordinator::new(Duration::from_secs(1), 3, None, false, false);
+        let coordinator =
+            Coordinator::new(Duration::from_secs(1), 3, None, false, false, None, None);
         let mut runner = FakeRunner::default();
         let mut parser = FakeParser::default();
         let mut monitor = FakeMceMonitor::default();
@@ -827,7 +867,8 @@ mod tests {
     fn given_core_failure_during_test_when_monitoring_then_captures_error_details() -> Result<()> {
         let fixture = TestFixture::new(&[(0, vec![0])])?;
         fixture.write_results(1, 0, "Hardware failure detected running 1344K FFT\n")?;
-        let coordinator = Coordinator::new(Duration::from_secs(6), 1, None, false, false);
+        let coordinator =
+            Coordinator::new(Duration::from_secs(6), 1, None, false, false, None, None);
         let mut runner = FakeRunner::default();
         let mut parser = FakeParser::default();
         let mut monitor = FakeMceMonitor::default();
@@ -867,8 +908,15 @@ mod tests {
     #[test]
     fn given_core_filter_when_subset_specified_then_only_tests_those_cores() -> Result<()> {
         let fixture = TestFixture::new(&[(0, vec![0]), (1, vec![1]), (2, vec![2])])?;
-        let coordinator =
-            Coordinator::new(Duration::from_secs(1), 1, Some(vec![0, 2]), false, false);
+        let coordinator = Coordinator::new(
+            Duration::from_secs(1),
+            1,
+            Some(vec![0, 2]),
+            false,
+            false,
+            None,
+            None,
+        );
         let mut runner = FakeRunner::default();
         let mut parser = FakeParser::default();
         let mut monitor = FakeMceMonitor::default();
@@ -1028,7 +1076,8 @@ mod tests {
     #[test]
     fn given_monitor_lifecycle_when_running_cycle_then_starts_and_stops_monitor() -> Result<()> {
         let fixture = TestFixture::new(&[(0, vec![0])])?;
-        let coordinator = Coordinator::new(Duration::from_secs(1), 1, None, false, false);
+        let coordinator =
+            Coordinator::new(Duration::from_secs(1), 1, None, false, false, None, None);
         let mut runner = FakeRunner::default();
         let mut parser = FakeParser::default();
         let started = Rc::new(Cell::new(false));
@@ -1079,7 +1128,8 @@ mod tests {
     #[test]
     fn given_shutdown_signal_when_running_then_polls_at_one_second_intervals() -> Result<()> {
         let fixture = TestFixture::new(&[(0, vec![0])])?;
-        let coordinator = Coordinator::new(Duration::from_secs(6), 1, None, false, false);
+        let coordinator =
+            Coordinator::new(Duration::from_secs(6), 1, None, false, false, None, None);
         let mut runner = FakeRunner::default();
         let mut parser = FakeParser::default();
         let mut monitor = FakeMceMonitor::default();
@@ -1218,7 +1268,7 @@ mod tests {
         // GIVEN: Two cores, first one fails, bail enabled
         let fixture = TestFixture::new(&[(0, vec![0]), (1, vec![1])])?;
         fixture.write_results(1, 0, "FATAL ERROR: test failure\n")?;
-        let coordinator = Coordinator::new(Duration::from_secs(6), 1, None, true, true);
+        let coordinator = Coordinator::new(Duration::from_secs(6), 1, None, true, true, None, None);
         let mut runner = FakeRunner::default();
         let mut parser = FakeParser::default();
         let mut monitor = FakeMceMonitor::default();
@@ -1249,7 +1299,8 @@ mod tests {
         // GIVEN: Two cores, first one fails, bail disabled
         let fixture = TestFixture::new(&[(0, vec![0]), (1, vec![1])])?;
         fixture.write_results(1, 0, "FATAL ERROR: test failure\n")?;
-        let coordinator = Coordinator::new(Duration::from_secs(6), 1, None, true, false);
+        let coordinator =
+            Coordinator::new(Duration::from_secs(6), 1, None, true, false, None, None);
         let mut runner = FakeRunner::default();
         let mut parser = FakeParser::default();
         let mut monitor = FakeMceMonitor::default();
@@ -1280,7 +1331,8 @@ mod tests {
     fn given_bail_enabled_when_all_pass_then_completes_normally() -> Result<()> {
         // GIVEN: Two cores, both pass, bail enabled
         let fixture = TestFixture::new(&[(0, vec![0]), (1, vec![1])])?;
-        let coordinator = Coordinator::new(Duration::from_secs(1), 1, None, false, true);
+        let coordinator =
+            Coordinator::new(Duration::from_secs(1), 1, None, false, true, None, None);
         let mut runner = FakeRunner::default();
         let mut parser = FakeParser::default();
         let mut monitor = FakeMceMonitor::default();
@@ -1314,7 +1366,7 @@ mod tests {
         // GIVEN: One core, fails in iteration 2, bail enabled
         let fixture = TestFixture::new(&[(0, vec![0])])?;
         fixture.write_results(2, 0, "FATAL ERROR: second iteration failure\n")?;
-        let coordinator = Coordinator::new(Duration::from_secs(6), 3, None, true, true);
+        let coordinator = Coordinator::new(Duration::from_secs(6), 3, None, true, true, None, None);
         let mut runner = FakeRunner::default();
         let mut parser = FakeParser::default();
         let mut monitor = FakeMceMonitor::default();

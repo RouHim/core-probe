@@ -21,7 +21,8 @@ ALL agents MUST adhere to these constraints without exception:
 - **Error Handling** — Use `anyhow` for errors; NO `unwrap()` or `expect()` in non-test code
 - **HTTP Client** — Use `ureq` if HTTP is needed; NOT reqwest or hyper
 - **TLS** — Use RustTLS only; NO OpenSSL
-- **Async Runtime** — NO async runtime; synchronous execution only
+- **Async Runtime** — NO external async runtime (tokio, async-std). Iced's built-in executor is permitted for GUI event loop.
+- **GUI Framework** — Use `iced` 0.14 for the graphical interface
 - **Dependencies** — Keep external crates minimal; prefer standard Rust library features
 
 ### Code Structure & Style

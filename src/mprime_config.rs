@@ -168,6 +168,10 @@ impl MprimeConfig {
         Self::default()
     }
 
+    pub fn from_mode(mode: &StressTestMode) -> Self {
+        Self::builder().mode(*mode)
+    }
+
     /// Sets the stress test mode (SSE, AVX, AVX2, AVX512, Custom).
     pub fn mode(mut self, mode: StressTestMode) -> Self {
         self.mode = mode;

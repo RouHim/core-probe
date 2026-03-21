@@ -218,6 +218,8 @@ impl<'a> StabilityReport<'a> {
             CoreStatus::Passed => "✓",
             CoreStatus::Failed => "✗",
             CoreStatus::Interrupted => "⊘",
+            CoreStatus::Idle => "◇",
+            CoreStatus::Testing => "◈",
             CoreStatus::Skipped => "○",
         };
 
@@ -225,6 +227,8 @@ impl<'a> StabilityReport<'a> {
             CoreStatus::Passed => "STABLE",
             CoreStatus::Failed => "UNSTABLE",
             CoreStatus::Interrupted => "INTERRUPTED",
+            CoreStatus::Idle => "IDLE",
+            CoreStatus::Testing => "TESTING",
             CoreStatus::Skipped => "SKIPPED",
         };
 
@@ -233,7 +237,7 @@ impl<'a> StabilityReport<'a> {
                 CoreStatus::Passed => COLOR_GREEN,
                 CoreStatus::Failed => COLOR_RED,
                 CoreStatus::Interrupted => COLOR_YELLOW,
-                CoreStatus::Skipped => "",
+                CoreStatus::Idle | CoreStatus::Testing | CoreStatus::Skipped => "",
             }
         } else {
             ""
