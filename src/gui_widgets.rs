@@ -127,25 +127,25 @@ fn build_uefi_section<'a>(
     col = col.push(text(agesa_label).size(13).color(text_secondary));
 
     // PBO badge
-    let pbo_text_val = match &settings.pbo_status {
-        Some(status) => {
-            let upper = status.to_uppercase();
-            if upper.contains("ENABLED") || upper.contains("ADVANCED") {
-                "PBO: ENABLED"
-            } else if upper.contains("DISABLED") {
-                "PBO: DISABLED"
-            } else {
-                "PBO: UNKNOWN"
-            }
-        }
-        None => "PBO: UNKNOWN",
-    };
+    let pbo_text_val = classify_pbo_badge(settings.pbo_status.as_deref());
 
     let (badge_bg, badge_fg) = match pbo_text_val {
         "PBO: ENABLED" => (pbo_badge_bg, pbo_badge_text),
         "PBO: DISABLED" => (
             iced::Color::from_rgb(0.4, 0.1, 0.1),
             iced::Color::from_rgb(1.0, 0.7, 0.7),
+        ),
+        "PBO: AUTO" => (
+            if is_dark {
+                iced::Color::from_rgb(0.16, 0.18, 0.24)
+            } else {
+                iced::Color::from_rgb(0.88, 0.9, 0.97)
+            },
+            if is_dark {
+                iced::Color::from_rgb(0.72, 0.78, 0.92)
+            } else {
+                iced::Color::from_rgb(0.2, 0.28, 0.45)
+            },
         ),
         _ => (
             if is_dark {
@@ -175,6 +175,27 @@ fn build_uefi_section<'a>(
     }
 
     col
+}
+
+fn classify_pbo_badge(status: Option<&str>) -> &'static str {
+    let Some(raw) = status else {
+        return "PBO: UNKNOWN";
+    };
+    let upper = raw.to_ascii_uppercase();
+    if upper.contains("DISABLED") {
+        "PBO: DISABLED"
+    } else if upper.contains("AUTO") {
+        "PBO: AUTO"
+    } else if upper.contains("ENABLED")
+        || upper.contains("ADVANCED")
+        || upper.contains("MOTHERBOARD")
+        || upper.contains("MANUAL")
+        || upper.contains("ECO")
+    {
+        "PBO: ENABLED"
+    } else {
+        "PBO: UNKNOWN"
+    }
 }
 
 fn build_limits_row<'a>(limits: &PboLimits, color: iced::Color) -> Element<'a, Message> {
@@ -230,11 +251,15 @@ pub fn core_tile_view<'a>(
     ]
     .spacing(4);
 
-    // Progress bar for Testing cores
+    // Progress bar for Testing cores (always reserve space to keep tile height consistent)
     if *status == CoreStatus::Testing {
         if let Some(val) = progress {
             col = col.push(container(progress_bar(0.0..=1.0, val)).height(Length::Fixed(6.0)));
+        } else {
+            col = col.push(Space::new().height(Length::Fixed(6.0)));
         }
+    } else {
+        col = col.push(Space::new().height(Length::Fixed(6.0)));
     }
 
     // CO offset
@@ -736,5 +761,30 @@ mod tests {
         let groups = group_cores_by_ccd(&core_map);
 
         assert!(groups.is_empty());
+    }
+
+    #[test]
+    fn given_auto_pbo_status_when_classifying_badge_then_returns_auto() {
+        assert_eq!(classify_pbo_badge(Some("Auto")), "PBO: AUTO");
+    }
+
+    #[test]
+    fn given_enabled_like_statuses_when_classifying_badge_then_returns_enabled() {
+        assert_eq!(classify_pbo_badge(Some("Enabled")), "PBO: ENABLED");
+        assert_eq!(classify_pbo_badge(Some("Advanced")), "PBO: ENABLED");
+        assert_eq!(classify_pbo_badge(Some("Motherboard")), "PBO: ENABLED");
+        assert_eq!(classify_pbo_badge(Some("Manual")), "PBO: ENABLED");
+        assert_eq!(classify_pbo_badge(Some("Eco Mode")), "PBO: ENABLED");
+    }
+
+    #[test]
+    fn given_disabled_pbo_status_when_classifying_badge_then_returns_disabled() {
+        assert_eq!(classify_pbo_badge(Some("Disabled")), "PBO: DISABLED");
+    }
+
+    #[test]
+    fn given_missing_or_unrecognized_pbo_status_when_classifying_badge_then_returns_unknown() {
+        assert_eq!(classify_pbo_badge(None), "PBO: UNKNOWN");
+        assert_eq!(classify_pbo_badge(Some("Custom profile")), "PBO: UNKNOWN");
     }
 }
