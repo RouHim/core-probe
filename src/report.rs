@@ -43,6 +43,7 @@ pub struct StabilityReport<'a> {
 /// Used internally for deduplication before report generation.
 struct AggregatedCoreResult {
     core_id: u32,
+    bios_index: u32,
     #[allow(dead_code)]
     logical_cpu_ids: Vec<u32>,
     worst_status: CoreStatus,
@@ -282,7 +283,13 @@ impl<'a> StabilityReport<'a> {
 
         let line = format!(
             "{} Core {:2}: {}{} {}{}{}",
-            BOX_VERTICAL, result.core_id, status_color, status_symbol, status_text, reset, co_part
+            BOX_VERTICAL,
+            result.bios_index,
+            status_color,
+            status_symbol,
+            status_text,
+            reset,
+            co_part
         );
 
         let vis = visible_len(&line);
@@ -399,7 +406,7 @@ impl<'a> StabilityReport<'a> {
         let failed_cores: Vec<u32> = deduped
             .iter()
             .filter(|r| r.worst_status == CoreStatus::Failed)
-            .map(|r| r.core_id)
+            .map(|r| r.bios_index)
             .collect();
 
         if failed_cores.is_empty() {
@@ -431,6 +438,7 @@ impl<'a> StabilityReport<'a> {
                 }
 
                 let core_id = entries[0].physical_core_id;
+                let bios_index = entries[0].bios_index;
                 let logical_cpu_ids = entries[0].logical_cpu_ids.clone();
 
                 let worst_status = entries.iter().fold(CoreStatus::Passed, |worst, entry| {
@@ -460,6 +468,7 @@ impl<'a> StabilityReport<'a> {
 
                 Some(AggregatedCoreResult {
                     core_id,
+                    bios_index,
                     logical_cpu_ids,
                     worst_status,
                     all_mprime_errors,

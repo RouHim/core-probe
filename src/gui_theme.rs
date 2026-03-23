@@ -455,6 +455,26 @@ pub fn status_text_color(status: &CoreStatus, is_dark: bool) -> Color {
 }
 
 // ---------------------------------------------------------------------------
+// Greyed-out color helpers (for de-emphasized, non-selected cores)
+// ---------------------------------------------------------------------------
+
+pub fn greyed_bg_color(is_dark: bool) -> Color {
+    if is_dark {
+        DARK_BG_TERTIARY
+    } else {
+        LIGHT_BG_TERTIARY
+    }
+}
+
+pub fn greyed_text_color(is_dark: bool) -> Color {
+    if is_dark {
+        DARK_TEXT_MUTED
+    } else {
+        LIGHT_TEXT_MUTED
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Log-level color helper
 // ---------------------------------------------------------------------------
 

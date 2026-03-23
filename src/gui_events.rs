@@ -136,25 +136,21 @@ fn format_intermediate_result(result: &CoreTestResult) -> Option<String> {
         crate::coordinator::CoreStatus::Idle
         | crate::coordinator::CoreStatus::Testing
         | crate::coordinator::CoreStatus::Skipped => None,
-        crate::coordinator::CoreStatus::Passed => Some(format!(
-            "  \u{2713} Core {:2}: STABLE",
-            result.physical_core_id
-        )),
+        crate::coordinator::CoreStatus::Passed => {
+            Some(format!("  \u{2713} Core {:2}: STABLE", result.bios_index))
+        }
         crate::coordinator::CoreStatus::Interrupted => Some(format!(
             "  \u{2298} Core {:2}: INTERRUPTED",
-            result.physical_core_id
+            result.bios_index
         )),
         crate::coordinator::CoreStatus::Failed => {
             let detail = format_error_summary(result);
             if detail.is_empty() {
-                Some(format!(
-                    "  \u{2717} Core {:2}: UNSTABLE",
-                    result.physical_core_id
-                ))
+                Some(format!("  \u{2717} Core {:2}: UNSTABLE", result.bios_index))
             } else {
                 Some(format!(
                     "  \u{2717} Core {:2}: UNSTABLE \u{2014} {}",
-                    result.physical_core_id, detail
+                    result.bios_index, detail
                 ))
             }
         }
