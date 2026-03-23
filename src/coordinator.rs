@@ -960,6 +960,16 @@ mod tests {
                     .iter()
                     .cloned()
                     .collect::<BTreeMap<u32, Vec<u32>>>(),
+                bios_map: core_map
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (physical_core_id, _))| (*physical_core_id, index as u32))
+                    .collect(),
+                physical_map: core_map
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (physical_core_id, _))| (index as u32, *physical_core_id))
+                    .collect(),
                 cpu_brand: None,
                 cpu_frequency_mhz: None,
             };

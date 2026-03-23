@@ -748,6 +748,8 @@ mod tests {
             physical_core_count: 2,
             logical_cpu_count: 2,
             core_map: BTreeMap::from([(0, vec![0]), (1, vec![1])]),
+            bios_map: BTreeMap::from([(0, 0), (1, 1)]),
+            physical_map: BTreeMap::from([(0, 0), (1, 1)]),
             cpu_brand: None,
             cpu_frequency_mhz: None,
         }

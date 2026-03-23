@@ -16,8 +16,20 @@ pub struct CpuTopology {
     pub physical_core_count: usize,
     pub logical_cpu_count: usize,
     pub core_map: BTreeMap<u32, Vec<u32>>,
+    pub bios_map: BTreeMap<u32, u32>,
+    pub physical_map: BTreeMap<u32, u32>,
     pub cpu_brand: Option<String>,
     pub cpu_frequency_mhz: Option<u64>,
+}
+
+impl CpuTopology {
+    pub fn bios_index(&self, physical_core_id: u32) -> Option<u32> {
+        self.bios_map.get(&physical_core_id).copied()
+    }
+
+    pub fn physical_id(&self, bios_index: u32) -> Option<u32> {
+        self.physical_map.get(&bios_index).copied()
+    }
 }
 
 #[derive(Debug)]
@@ -249,6 +261,14 @@ fn detect_cpu_topology_from_parsed_sources(
         siblings.dedup();
     }
 
+    let bios_map: BTreeMap<u32, u32> = core_map
+        .keys()
+        .enumerate()
+        .map(|(idx, &phys)| (phys, idx as u32))
+        .collect();
+    let physical_map: BTreeMap<u32, u32> =
+        bios_map.iter().map(|(&phys, &bios)| (bios, phys)).collect();
+
     let (cpu_brand, cpu_frequency_mhz) = sysinfo_override.unwrap_or((None, None));
     let model_name = if cpu_info.model_name.is_empty() {
         cpu_brand
@@ -264,6 +284,8 @@ fn detect_cpu_topology_from_parsed_sources(
         physical_core_count: core_map.len(),
         logical_cpu_count: core_ids.len(),
         core_map,
+        bios_map,
+        physical_map,
         cpu_brand,
         cpu_frequency_mhz,
     })
@@ -305,6 +327,8 @@ flags : fpu sse sse2 avx";
         assert_eq!(topology.logical_cpu_count, 4);
         assert_eq!(topology.physical_core_count, 2);
         assert_eq!(topology.core_map, expected_map);
+        assert_eq!(topology.bios_index(0), Some(0));
+        assert_eq!(topology.bios_index(1), Some(1));
     }
 
     #[test]
@@ -393,5 +417,79 @@ flags : fpu sse sse2 avx";
 
         let expected_map = BTreeMap::from([(0, vec![0, 6]), (1, vec![1, 7])]);
         assert_eq!(topology.core_map, expected_map);
+    }
+
+    #[test]
+    fn given_contiguous_core_ids_when_computing_bios_map_then_identity_mapping() {
+        let core_ids = vec![(0, 0), (1, 1), (2, 2), (3, 3)];
+
+        let topology = detect_cpu_topology_from_parsed_sources(AMD_CPUINFO, &core_ids, None)
+            .expect("contiguous core IDs should produce identity BIOS mapping");
+
+        assert_eq!(topology.bios_index(0), Some(0));
+        assert_eq!(topology.bios_index(1), Some(1));
+        assert_eq!(topology.bios_index(2), Some(2));
+        assert_eq!(topology.bios_index(3), Some(3));
+    }
+
+    #[test]
+    fn given_non_contiguous_5900x_ids_when_computing_bios_map_then_sequential_indices() {
+        let core_ids = vec![
+            (0, 0),
+            (1, 1),
+            (2, 2),
+            (3, 3),
+            (4, 4),
+            (5, 5),
+            (6, 8),
+            (7, 9),
+            (8, 10),
+            (9, 11),
+            (10, 12),
+            (11, 13),
+        ];
+
+        let topology = detect_cpu_topology_from_parsed_sources(AMD_CPUINFO, &core_ids, None)
+            .expect("non-contiguous 5900X IDs should produce sequential BIOS indices");
+
+        assert_eq!(topology.bios_index(0), Some(0));
+        assert_eq!(topology.bios_index(5), Some(5));
+        assert_eq!(topology.bios_index(8), Some(6));
+        assert_eq!(topology.bios_index(13), Some(11));
+    }
+
+    #[test]
+    fn given_bios_index_when_reverse_mapping_then_returns_physical_id() {
+        let core_ids = vec![
+            (0, 0),
+            (1, 1),
+            (2, 2),
+            (3, 3),
+            (4, 4),
+            (5, 5),
+            (6, 8),
+            (7, 9),
+            (8, 10),
+            (9, 11),
+            (10, 12),
+            (11, 13),
+        ];
+
+        let topology = detect_cpu_topology_from_parsed_sources(AMD_CPUINFO, &core_ids, None)
+            .expect("reverse mapping should be computed from BIOS map");
+
+        assert_eq!(topology.physical_id(6), Some(8));
+        assert_eq!(topology.physical_id(7), Some(9));
+    }
+
+    #[test]
+    fn given_single_core_when_computing_bios_map_then_maps_to_zero() {
+        let core_ids = vec![(0, 8)];
+
+        let topology = detect_cpu_topology_from_parsed_sources(AMD_CPUINFO, &core_ids, None)
+            .expect("single core should map to BIOS index zero");
+
+        assert_eq!(topology.bios_index(8), Some(0));
+        assert_eq!(topology.physical_id(0), Some(8));
     }
 }

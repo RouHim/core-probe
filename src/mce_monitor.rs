@@ -467,6 +467,8 @@ apicid : 16
             physical_core_count: 2,
             logical_cpu_count: 2,
             core_map: BTreeMap::from([(0, vec![0]), (6, vec![8])]),
+            bios_map: BTreeMap::from([(0, 0), (6, 1)]),
+            physical_map: BTreeMap::from([(0, 0), (1, 6)]),
             cpu_brand: None,
             cpu_frequency_mhz: None,
         };
@@ -485,6 +487,8 @@ apicid : 16
             physical_core_count: 1,
             logical_cpu_count: 1,
             core_map: BTreeMap::from([(0, vec![0])]),
+            bios_map: BTreeMap::from([(0, 0)]),
+            physical_map: BTreeMap::from([(0, 0)]),
             cpu_brand: None,
             cpu_frequency_mhz: None,
         };
@@ -512,6 +516,8 @@ apicid : 16
             physical_core_count: 2,
             logical_cpu_count: 2,
             core_map: BTreeMap::from([(0, vec![0]), (6, vec![8])]),
+            bios_map: BTreeMap::from([(0, 0), (6, 1)]),
+            physical_map: BTreeMap::from([(0, 0), (1, 6)]),
             cpu_brand: None,
             cpu_frequency_mhz: None,
         };
@@ -556,6 +562,8 @@ Feb 27 12:00:01 host kernel: mce: [Hardware Error]: CPU 8: Machine Check Excepti
             physical_core_count: 1,
             logical_cpu_count: 1,
             core_map: BTreeMap::from([(0, vec![0])]),
+            bios_map: BTreeMap::from([(0, 0)]),
+            physical_map: BTreeMap::from([(0, 0)]),
             cpu_brand: None,
             cpu_frequency_mhz: None,
         };
