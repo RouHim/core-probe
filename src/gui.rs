@@ -360,15 +360,25 @@ fn process_event(state: &mut CoreProbeApp, event: TestEvent) {
             state.progress.current_core = None;
         }
         TestEvent::CoreTestStarting {
-            physical_core_id, ..
+            physical_core_id,
+            bios_index,
+            iteration,
         } => {
             state.progress.current_core = Some(physical_core_id);
             state
                 .core_statuses
                 .insert(physical_core_id, CoreStatus::Testing);
+            append_log(
+                state,
+                LogLevel::Default,
+                format!("Core {bios_index} starting (iteration {iteration})"),
+            );
         }
         TestEvent::CoreTestProgress {
-            physical_core_id, ..
+            physical_core_id,
+            bios_index,
+            elapsed_secs,
+            duration_secs,
         } => {
             state.progress.current_core = Some(physical_core_id);
             if matches!(
@@ -379,6 +389,7 @@ fn process_event(state: &mut CoreProbeApp, event: TestEvent) {
                     .core_statuses
                     .insert(physical_core_id, CoreStatus::Testing);
             }
+            let _ = (bios_index, elapsed_secs, duration_secs);
         }
         TestEvent::CoreTestCompleted { result } => {
             let status = result.status.clone();
@@ -387,27 +398,15 @@ fn process_event(state: &mut CoreProbeApp, event: TestEvent) {
                 .insert(result.physical_core_id, status.clone());
             state.progress.cores_completed = state.progress.cores_completed.saturating_add(1);
 
+            let bios_idx = result.bios_index;
             let (level, message) = match status {
-                CoreStatus::Passed => (
-                    LogLevel::Stable,
-                    format!("Core {} stable", result.physical_core_id),
-                ),
-                CoreStatus::Failed => (
-                    LogLevel::Error,
-                    format!("Core {} unstable", result.physical_core_id),
-                ),
-                CoreStatus::Interrupted => (
-                    LogLevel::Mce,
-                    format!("Core {} interrupted", result.physical_core_id),
-                ),
-                CoreStatus::Skipped => (
-                    LogLevel::Default,
-                    format!("Core {} skipped", result.physical_core_id),
-                ),
-                CoreStatus::Idle | CoreStatus::Testing => (
-                    LogLevel::Default,
-                    format!("Core {} updated", result.physical_core_id),
-                ),
+                CoreStatus::Passed => (LogLevel::Stable, format!("Core {bios_idx} stable")),
+                CoreStatus::Failed => (LogLevel::Error, format!("Core {bios_idx} unstable")),
+                CoreStatus::Interrupted => (LogLevel::Mce, format!("Core {bios_idx} interrupted")),
+                CoreStatus::Skipped => (LogLevel::Default, format!("Core {bios_idx} skipped")),
+                CoreStatus::Idle | CoreStatus::Testing => {
+                    (LogLevel::Default, format!("Core {bios_idx} updated"))
+                }
             };
 
             append_log(state, level, message);
@@ -539,31 +538,31 @@ fn parse_core_filter(input: &str, topology: &CpuTopology) -> Result<Option<Vec<u
         return Ok(None);
     }
 
-    let mut parsed = Vec::new();
+    let mut bios_indices = Vec::new();
     for token in trimmed.split(',') {
         let token = token.trim();
         if token.is_empty() {
             continue;
         }
 
-        let core_id = token
+        let bios_idx = token
             .parse::<u32>()
-            .map_err(|_| format!("Invalid core id '{token}' in core filter"))?;
-        parsed.push(core_id);
+            .map_err(|_| format!("Invalid BIOS core index '{token}' in core filter"))?;
+        bios_indices.push(bios_idx);
     }
 
-    if parsed.is_empty() {
+    if bios_indices.is_empty() {
         return Ok(None);
     }
 
-    parsed.sort_unstable();
-    parsed.dedup();
+    bios_indices.sort_unstable();
+    bios_indices.dedup();
 
-    let available: std::collections::BTreeSet<u32> = topology.core_map.keys().copied().collect();
-    let invalid: Vec<u32> = parsed
+    let max_bios_index = topology.core_map.len() as u32;
+    let invalid: Vec<u32> = bios_indices
         .iter()
         .copied()
-        .filter(|core| !available.contains(core))
+        .filter(|&idx| idx >= max_bios_index)
         .collect();
 
     if !invalid.is_empty() {
@@ -572,10 +571,18 @@ fn parse_core_filter(input: &str, topology: &CpuTopology) -> Result<Option<Vec<u
             .map(u32::to_string)
             .collect::<Vec<_>>()
             .join(",");
-        return Err(format!("Invalid core id(s): {invalid_list}"));
+        return Err(format!(
+            "Invalid BIOS core indices: {invalid_list}. Valid range: 0-{}",
+            max_bios_index.saturating_sub(1)
+        ));
     }
 
-    Ok(Some(parsed))
+    let physical_ids: Vec<u32> = bios_indices
+        .iter()
+        .map(|&idx| topology.physical_id(idx).unwrap_or(idx))
+        .collect();
+
+    Ok(Some(physical_ids))
 }
 
 pub fn run_gui() -> iced::Result {

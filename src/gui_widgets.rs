@@ -259,8 +259,10 @@ fn build_limits_row<'a>(limits: &PboLimits, color: iced::Color) -> Element<'a, M
 // core_tile_view
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 pub fn core_tile_view<'a>(
     core_id: u32,
+    bios_index: u32,
     status: &CoreStatus,
     progress: Option<f32>,
     co_offset: Option<i32>,
@@ -289,8 +291,17 @@ pub fn core_tile_view<'a>(
         CoreStatus::Interrupted => ("\u{26a0}", "INTERRUPTED"),
     };
 
+    let phys_color = if greyed_out {
+        gui_theme::greyed_text_color(is_dark)
+    } else if is_dark {
+        gui_theme::DARK_TEXT_SECONDARY
+    } else {
+        gui_theme::LIGHT_TEXT_SECONDARY
+    };
+
     let mut col = column![
-        text(format!("Core {core_id}")).size(16).color(fg),
+        text(format!("Core {bios_index}")).size(16).color(fg),
+        text(format!("phys {core_id}")).size(11).color(phys_color),
         row![
             text(icon).size(14).color(fg),
             text(label).size(12).color(fg),
@@ -435,8 +446,11 @@ pub fn topology_grid_view<'a>(
                 .as_ref()
                 .is_some_and(|cores| !cores.contains(core_id));
 
+            let bios_idx = topology.bios_index(*core_id).unwrap_or(*core_id);
+
             let tile = core_tile_view(
                 *core_id,
+                bios_idx,
                 status,
                 core_progress,
                 co_offset,

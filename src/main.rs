@@ -21,7 +21,6 @@ pub mod report;
 pub mod signal_handler;
 pub mod uefi_reader;
 
-use std::collections::BTreeSet;
 use std::fs;
 use std::time::Duration;
 
@@ -51,7 +50,7 @@ struct Args {
     #[argh(option, short = 'i', default = "3_u32")]
     iterations: u32,
 
-    /// only test specific cores (comma-separated, e.g. "0,2,5")
+    /// only test specific cores by BIOS index (comma-separated, e.g. "0,2,5")
     #[argh(option, short = 'c')]
     cores: Option<String>,
 
@@ -296,31 +295,31 @@ fn parse_core_filter(cores: Option<&str>, topology: &CpuTopology) -> Result<Opti
         return Ok(None);
     };
 
-    let mut parsed = Vec::new();
+    let mut bios_indices = Vec::new();
     for token in cores.split(',') {
         let token = token.trim();
         if token.is_empty() {
             continue;
         }
 
-        let core_id = token
+        let bios_idx = token
             .parse::<u32>()
-            .with_context(|| format!("invalid core id '{token}' in --cores list"))?;
-        parsed.push(core_id);
+            .with_context(|| format!("invalid BIOS core index '{token}' in --cores list"))?;
+        bios_indices.push(bios_idx);
     }
 
-    if parsed.is_empty() {
-        bail!("--cores was provided but no valid core IDs were found");
+    if bios_indices.is_empty() {
+        bail!("--cores was provided but no valid BIOS core indices were found");
     }
 
-    parsed.sort_unstable();
-    parsed.dedup();
+    bios_indices.sort_unstable();
+    bios_indices.dedup();
 
-    let available: BTreeSet<u32> = topology.core_map.keys().copied().collect();
-    let invalid: Vec<u32> = parsed
+    let max_bios_index = topology.core_map.len() as u32;
+    let invalid: Vec<u32> = bios_indices
         .iter()
         .copied()
-        .filter(|core| !available.contains(core))
+        .filter(|&idx| idx >= max_bios_index)
         .collect();
 
     if !invalid.is_empty() {
@@ -329,16 +328,19 @@ fn parse_core_filter(cores: Option<&str>, topology: &CpuTopology) -> Result<Opti
             .map(u32::to_string)
             .collect::<Vec<_>>()
             .join(",");
-        let valid_list = available
-            .iter()
-            .map(u32::to_string)
-            .collect::<Vec<_>>()
-            .join(",");
 
-        bail!("invalid core id(s): {invalid_list}. Available physical core IDs: {valid_list}");
+        bail!(
+            "invalid BIOS core indices: {invalid_list}. Valid range: 0-{}",
+            max_bios_index.saturating_sub(1)
+        );
     }
 
-    Ok(Some(parsed))
+    let physical_ids: Vec<u32> = bios_indices
+        .iter()
+        .map(|&idx| topology.physical_id(idx).unwrap_or(idx))
+        .collect();
+
+    Ok(Some(physical_ids))
 }
 
 fn parse_stress_mode(mode: &str) -> Result<StressTestMode> {
@@ -679,7 +681,7 @@ mod tests {
     fn given_cores_arg_when_parsing_then_filters_to_specified_cores() {
         let topology = test_topology();
 
-        let parsed = parse_core_filter(Some("0,5"), &topology)
+        let parsed = parse_core_filter(Some("0,2"), &topology)
             .expect("valid --cores list should parse successfully");
 
         assert_eq!(parsed, Some(vec![0, 5]));
@@ -690,11 +692,41 @@ mod tests {
         let topology = test_topology();
 
         let error = parse_core_filter(Some("99"), &topology)
-            .expect_err("invalid core id should return an error")
+            .expect_err("invalid BIOS core index should return an error")
             .to_string();
 
-        assert!(error.contains("invalid core id"));
-        assert!(error.contains("0,1,5"));
+        assert!(error.contains("invalid BIOS core indices"));
+        assert!(error.contains("Valid range: 0-2"));
+    }
+
+    #[test]
+    fn given_bios_index_when_parsing_then_maps_to_physical_core_id() {
+        let mut core_map = BTreeMap::new();
+        for id in [0_u32, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13] {
+            core_map.insert(id, vec![id * 2, id * 2 + 1]);
+        }
+        let bios_map: BTreeMap<u32, u32> = core_map
+            .keys()
+            .enumerate()
+            .map(|(i, &p)| (p, i as u32))
+            .collect();
+        let physical_map: BTreeMap<u32, u32> = bios_map.iter().map(|(&p, &b)| (b, p)).collect();
+        let topology = CpuTopology {
+            vendor: "AuthenticAMD".to_string(),
+            model_name: "AMD Ryzen 9 5900X".to_string(),
+            physical_core_count: 12,
+            logical_cpu_count: 24,
+            core_map,
+            bios_map,
+            physical_map,
+            cpu_brand: None,
+            cpu_frequency_mhz: None,
+        };
+
+        let parsed = parse_core_filter(Some("6,7"), &topology)
+            .expect("BIOS indices 6,7 should map to physical cores 8,9");
+
+        assert_eq!(parsed, Some(vec![8, 9]));
     }
 
     #[test]
