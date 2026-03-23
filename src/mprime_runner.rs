@@ -306,6 +306,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
     use std::time::Duration;
 
     use anyhow::{bail, Context, Result};
@@ -313,8 +314,16 @@ mod tests {
     use super::MprimeRunner;
     use crate::embedded::ExtractedBinaries;
 
+    fn acquire_mprime_test_lock() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[test]
     fn given_extracted_mprime_when_starting_then_process_spawns_successfully() -> Result<()> {
+        let _serial = acquire_mprime_test_lock();
         let fixture = RunnerFixture::new()?;
         let mut runner = fixture.runner_for_real_mprime();
         let work_dir = fixture.unique_working_dir("spawn-success");
@@ -331,6 +340,7 @@ mod tests {
 
     #[test]
     fn given_running_mprime_when_stopping_then_process_terminates() -> Result<()> {
+        let _serial = acquire_mprime_test_lock();
         let fixture = RunnerFixture::new()?;
         let mut runner = fixture.runner_for_real_mprime();
         let work_dir = fixture.unique_working_dir("stop-terminates");
@@ -349,6 +359,7 @@ mod tests {
 
     #[test]
     fn given_core_id_when_pinning_then_mprime_runs_on_correct_cpu() -> Result<()> {
+        let _serial = acquire_mprime_test_lock();
         let fixture = RunnerFixture::new()?;
         let mut runner = fixture.runner_for_real_mprime();
         let work_dir = fixture.unique_working_dir("cpu-pinning");
@@ -372,6 +383,7 @@ mod tests {
 
     #[test]
     fn given_working_dir_when_starting_then_mprime_uses_isolated_directory() -> Result<()> {
+        let _serial = acquire_mprime_test_lock();
         let fixture = RunnerFixture::new()?;
         let mut runner = fixture.runner_for_real_mprime();
         let work_dir = fixture.unique_working_dir("isolated-workdir");
@@ -410,6 +422,7 @@ mod tests {
 
     #[test]
     fn given_mprime_crash_when_monitoring_then_detects_exit() -> Result<()> {
+        let _serial = acquire_mprime_test_lock();
         let fixture = RunnerFixture::new()?;
         let mut runner = fixture.runner_for_crashing_process();
         let work_dir = fixture.unique_working_dir("crash-detection");
@@ -564,6 +577,7 @@ mod tests {
 
     #[test]
     fn given_core_id_when_starting_then_prime_txt_disables_internal_affinity() -> Result<()> {
+        let _serial = acquire_mprime_test_lock();
         // Given: Runner configured to test physical core 0 mapped to a specific logical CPU
         let fixture = RunnerFixture::new()?;
         let mut runner = fixture.runner_for_real_mprime();
@@ -598,6 +612,7 @@ mod tests {
 
     #[test]
     fn given_running_mprime_when_checking_threads_then_all_pinned_to_target_cpu() -> Result<()> {
+        let _serial = acquire_mprime_test_lock();
         // Given: Runner configured to test physical core 0
         let fixture = RunnerFixture::new()?;
         let mut runner = fixture.runner_for_real_mprime();

@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 
+use iced::widget::tooltip::Position as TooltipPosition;
 use iced::widget::{
-    button, column, container, pick_list, progress_bar, row, scrollable, text, text_input, Space,
+    button, column, container, pick_list, progress_bar, row, scrollable, text, text_input, tooltip,
+    Space,
 };
 use iced::{Element, Length, Padding};
 
@@ -167,7 +169,34 @@ fn build_uefi_section<'a>(
             },
             ..Default::default()
         });
-    col = col.push(pbo_badge);
+
+    let hint = pbo_tooltip_hint(pbo_text_val);
+    let pbo_with_tooltip = tooltip(pbo_badge, text(hint).size(12), TooltipPosition::Bottom)
+        .gap(4)
+        .style(move |theme: &iced::Theme| {
+            let _ = theme;
+            container::Style {
+                background: Some(
+                    if is_dark {
+                        iced::Color::from_rgb(0.15, 0.15, 0.18)
+                    } else {
+                        iced::Color::from_rgb(0.97, 0.97, 0.97)
+                    }
+                    .into(),
+                ),
+                border: iced::Border {
+                    radius: 4.0.into(),
+                    width: 1.0,
+                    color: if is_dark {
+                        iced::Color::from_rgb(0.3, 0.3, 0.35)
+                    } else {
+                        iced::Color::from_rgb(0.8, 0.8, 0.8)
+                    },
+                },
+                ..Default::default()
+            }
+        });
+    col = col.push(pbo_with_tooltip);
 
     // PBO limits if available
     if let Some(limits) = &settings.pbo_limits {
@@ -195,6 +224,15 @@ fn classify_pbo_badge(status: Option<&str>) -> &'static str {
         "PBO: ENABLED"
     } else {
         "PBO: UNKNOWN"
+    }
+}
+
+fn pbo_tooltip_hint(badge_label: &str) -> &'static str {
+    match badge_label {
+        "PBO: ENABLED" => "PBO is actively enabled — cores boost beyond stock limits.\nStability test results are most meaningful in this mode.",
+        "PBO: DISABLED" => "PBO is disabled — cores run at stock frequencies.\nStability issues are unlikely; test results may be less informative.",
+        "PBO: AUTO" => "PBO is set to BIOS default — the motherboard decides\nwhether to enable boosting. Actual behavior varies by vendor.",
+        _ => "PBO status could not be determined from UEFI settings.",
     }
 }
 
@@ -476,7 +514,33 @@ pub fn config_panel_view<'a>(
     };
 
     // Cores input
-    let cores_label = text("Cores").size(13).color(text_secondary);
+    let cores_label = tooltip(
+        text("Cores").size(13).color(text_secondary),
+        text("Leave empty or type \"all\" to test every core.\nTo test specific cores, enter comma-separated IDs: 0,1,5,8")
+            .size(12),
+        TooltipPosition::Top,
+    )
+    .gap(4)
+    .style(move |_theme: &iced::Theme| container::Style {
+        background: Some(
+            if is_dark {
+                iced::Color::from_rgb(0.15, 0.15, 0.18)
+            } else {
+                iced::Color::from_rgb(0.97, 0.97, 0.97)
+            }
+            .into(),
+        ),
+        border: iced::Border {
+            radius: 4.0.into(),
+            width: 1.0,
+            color: if is_dark {
+                iced::Color::from_rgb(0.3, 0.3, 0.35)
+            } else {
+                iced::Color::from_rgb(0.8, 0.8, 0.8)
+            },
+        },
+        ..Default::default()
+    });
     let mut cores_input = text_input("all", &config.cores);
     if !test_running {
         cores_input = cores_input.on_input(|s| Message::ConfigChanged(ConfigField::Cores(s)));

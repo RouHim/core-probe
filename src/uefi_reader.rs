@@ -106,6 +106,18 @@ fn non_empty_non_auto_value(value: &str) -> Option<String> {
     }
 }
 
+fn looks_like_pbo_mode(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    normalized.contains("auto")
+        || normalized.contains("enabled")
+        || normalized.contains("disabled")
+        || normalized.contains("advanced")
+        || normalized.contains("manual")
+        || normalized.contains("motherboard")
+        || normalized.contains("eco")
+        || normalized.contains("default")
+}
+
 /// Extract a version string from text by splitting on the first `:` or `=` separator.
 /// Returns the trimmed right-hand side if non-empty, None otherwise.
 fn extract_agesa_from_text(text: &str) -> Option<String> {
@@ -241,6 +253,14 @@ pub fn parse_hii_questions(questions: &[HiiQuestion]) -> UefiSettings {
                     }
                     ver
                 });
+        }
+    }
+
+    if pbo_status.is_none() {
+        if let Some(mode) = pbo_limits_mode.as_deref() {
+            if looks_like_pbo_mode(mode) {
+                pbo_status = Some(mode.to_string());
+            }
         }
     }
 
@@ -504,7 +524,7 @@ mod tests {
     fn given_unavailable_reason_when_creating_then_stores_reason() {
         let settings = UefiSettings::unavailable("test reason");
 
-        assert_eq!(settings.available, false);
+        assert!(!settings.available);
         assert_eq!(settings.unavailable_reason, Some("test reason".to_string()));
     }
 
@@ -512,7 +532,7 @@ mod tests {
     fn given_default_settings_when_checking_then_not_available() {
         let settings = UefiSettings::default();
 
-        assert_eq!(settings.available, false);
+        assert!(!settings.available);
     }
 
     #[test]
@@ -632,12 +652,8 @@ mod tests {
 
     #[test]
     fn given_extract_db_fails_when_reading_then_returns_unavailable() {
-        let err: anyhow::Result<UefiSettings> = Err(anyhow::anyhow!(
-            "Failed to extract HII database: permission denied"
-        ));
-
-        let settings =
-            err.unwrap_or_else(|e| UefiSettings::unavailable(format!("UEFI reading failed: {e}")));
+        let error = anyhow::anyhow!("Failed to extract HII database: permission denied");
+        let settings = UefiSettings::unavailable(format!("UEFI reading failed: {error}"));
 
         assert!(!settings.available);
         assert!(settings
@@ -993,6 +1009,7 @@ mod tests {
 
         let settings = parse_hii_questions(&questions);
 
+        assert_eq!(settings.pbo_status, Some("Auto".to_string()));
         let limits = settings.pbo_limits.expect("pbo_limits should be present");
         assert_eq!(limits.ppt_limit, Some("Auto".to_string()));
         assert_eq!(limits.tdc_limit, None);
