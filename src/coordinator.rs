@@ -33,7 +33,8 @@ pub enum CoreStatus {
 
 #[derive(Debug, Clone)]
 pub struct CoreTestResult {
-    pub core_id: u32,
+    pub physical_core_id: u32,
+    pub bios_index: u32,
     pub logical_cpu_ids: Vec<u32>,
     pub status: CoreStatus,
     pub mprime_errors: Vec<MprimeError>,
@@ -63,7 +64,7 @@ pub struct Coordinator {
 trait RunnerControl {
     fn start(
         &mut self,
-        core_id: u32,
+        physical_core_id: u32,
         working_dir: &Path,
         config: Option<&MprimeConfig>,
     ) -> Result<()>;
@@ -75,11 +76,11 @@ trait RunnerControl {
 impl RunnerControl for MprimeRunner {
     fn start(
         &mut self,
-        core_id: u32,
+        physical_core_id: u32,
         working_dir: &Path,
         config: Option<&MprimeConfig>,
     ) -> Result<()> {
-        self.start(core_id, working_dir, config)
+        self.start(physical_core_id, working_dir, config)
     }
 
     fn stop(&mut self) -> Result<()> {
@@ -225,7 +226,8 @@ impl Coordinator {
 
                 if !is_core_selected(*core_id, allowed_cores.as_ref()) {
                     results.push(CoreTestResult {
-                        core_id: *core_id,
+                        physical_core_id: *core_id,
+                        bios_index: topology.bios_index(*core_id).unwrap_or(*core_id),
                         logical_cpu_ids: logical_cpu_ids_for_core(topology, *core_id),
                         status: CoreStatus::Skipped,
                         mprime_errors: Vec::new(),
@@ -333,7 +335,11 @@ impl Coordinator {
             .position(|&c| c == core_id)
             .unwrap_or(0)
             + 1;
-        self.emit_event(TestEvent::CoreTestStarting { core_id, iteration });
+        self.emit_event(TestEvent::CoreTestStarting {
+            physical_core_id: core_id,
+            bios_index: topology.bios_index(core_id).unwrap_or(core_id),
+            iteration,
+        });
         self.emit_event(TestEvent::LogMessage {
             level: LogLevel::Default,
             message: format!(
@@ -376,7 +382,8 @@ impl Coordinator {
                     .stop()
                     .context("failed to stop mprime after shutdown")?;
                 return Ok(CoreTestResult {
-                    core_id,
+                    physical_core_id: core_id,
+                    bios_index: topology.bios_index(core_id).unwrap_or(core_id),
                     logical_cpu_ids,
                     status: CoreStatus::Interrupted,
                     mprime_errors,
@@ -402,7 +409,8 @@ impl Coordinator {
                         .stop()
                         .context("failed to stop mprime after error detection")?;
                     return Ok(CoreTestResult {
-                        core_id,
+                        physical_core_id: core_id,
+                        bios_index: topology.bios_index(core_id).unwrap_or(core_id),
                         logical_cpu_ids,
                         status: CoreStatus::Failed,
                         mprime_errors,
@@ -450,7 +458,8 @@ impl Coordinator {
                 }
 
                 return Ok(CoreTestResult {
-                    core_id,
+                    physical_core_id: core_id,
+                    bios_index: topology.bios_index(core_id).unwrap_or(core_id),
                     logical_cpu_ids,
                     status: CoreStatus::Failed,
                     mprime_errors,
@@ -485,7 +494,8 @@ impl Coordinator {
         };
 
         Ok(CoreTestResult {
-            core_id,
+            physical_core_id: core_id,
+            bios_index: topology.bios_index(core_id).unwrap_or(core_id),
             logical_cpu_ids,
             status,
             mprime_errors,
@@ -612,18 +622,25 @@ fn is_core_selected(core_id: u32, filter: Option<&BTreeSet<u32>>) -> bool {
 fn format_intermediate_result(result: &CoreTestResult) -> Option<String> {
     match result.status {
         CoreStatus::Idle | CoreStatus::Testing | CoreStatus::Skipped => None,
-        CoreStatus::Passed => Some(format!("  \u{2713} Core {:2}: STABLE", result.core_id)),
-        CoreStatus::Interrupted => {
-            Some(format!("  \u{2298} Core {:2}: INTERRUPTED", result.core_id))
-        }
+        CoreStatus::Passed => Some(format!(
+            "  \u{2713} Core {:2}: STABLE",
+            result.physical_core_id
+        )),
+        CoreStatus::Interrupted => Some(format!(
+            "  \u{2298} Core {:2}: INTERRUPTED",
+            result.physical_core_id
+        )),
         CoreStatus::Failed => {
             let detail = format_error_summary(result);
             if detail.is_empty() {
-                Some(format!("  \u{2717} Core {:2}: UNSTABLE", result.core_id))
+                Some(format!(
+                    "  \u{2717} Core {:2}: UNSTABLE",
+                    result.physical_core_id
+                ))
             } else {
                 Some(format!(
                     "  \u{2717} Core {:2}: UNSTABLE \u{2014} {}",
-                    result.core_id, detail
+                    result.physical_core_id, detail
                 ))
             }
         }
@@ -1408,7 +1425,8 @@ mod tests {
     #[test]
     fn given_passed_core_when_formatting_intermediate_then_shows_stable_symbol() {
         let result = CoreTestResult {
-            core_id: 3,
+            physical_core_id: 3,
+            bios_index: 3,
             logical_cpu_ids: vec![3, 15],
             status: CoreStatus::Passed,
             mprime_errors: Vec::new(),
@@ -1429,7 +1447,8 @@ mod tests {
     #[test]
     fn given_failed_core_with_roundoff_when_formatting_intermediate_then_shows_error_type() {
         let result = CoreTestResult {
-            core_id: 5,
+            physical_core_id: 5,
+            bios_index: 5,
             logical_cpu_ids: vec![5, 17],
             status: CoreStatus::Failed,
             mprime_errors: vec![MprimeError {
@@ -1455,7 +1474,8 @@ mod tests {
     #[test]
     fn given_skipped_core_when_formatting_intermediate_then_returns_none() {
         let result = CoreTestResult {
-            core_id: 1,
+            physical_core_id: 1,
+            bios_index: 1,
             logical_cpu_ids: vec![1],
             status: CoreStatus::Skipped,
             mprime_errors: Vec::new(),
@@ -1472,7 +1492,8 @@ mod tests {
     #[test]
     fn given_interrupted_core_when_formatting_intermediate_then_shows_interrupted() {
         let result = CoreTestResult {
-            core_id: 11,
+            physical_core_id: 11,
+            bios_index: 11,
             logical_cpu_ids: vec![9, 21],
             status: CoreStatus::Interrupted,
             mprime_errors: Vec::new(),

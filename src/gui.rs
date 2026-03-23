@@ -277,6 +277,7 @@ pub fn view(state: &CoreProbeApp) -> Element<'_, Message> {
             &state.progress,
             &state.uefi_settings,
             is_dark,
+            &None,
         )
     } else {
         container(text("CPU topology unavailable"))
@@ -358,40 +359,54 @@ fn process_event(state: &mut CoreProbeApp, event: TestEvent) {
             state.progress.cores_completed = 0;
             state.progress.current_core = None;
         }
-        TestEvent::CoreTestStarting { core_id, .. } => {
-            state.progress.current_core = Some(core_id);
-            state.core_statuses.insert(core_id, CoreStatus::Testing);
+        TestEvent::CoreTestStarting {
+            physical_core_id, ..
+        } => {
+            state.progress.current_core = Some(physical_core_id);
+            state
+                .core_statuses
+                .insert(physical_core_id, CoreStatus::Testing);
         }
-        TestEvent::CoreTestProgress { core_id, .. } => {
-            state.progress.current_core = Some(core_id);
+        TestEvent::CoreTestProgress {
+            physical_core_id, ..
+        } => {
+            state.progress.current_core = Some(physical_core_id);
             if matches!(
-                state.core_statuses.get(&core_id),
+                state.core_statuses.get(&physical_core_id),
                 Some(CoreStatus::Idle) | None
             ) {
-                state.core_statuses.insert(core_id, CoreStatus::Testing);
+                state
+                    .core_statuses
+                    .insert(physical_core_id, CoreStatus::Testing);
             }
         }
         TestEvent::CoreTestCompleted { result } => {
             let status = result.status.clone();
-            state.core_statuses.insert(result.core_id, status.clone());
+            state
+                .core_statuses
+                .insert(result.physical_core_id, status.clone());
             state.progress.cores_completed = state.progress.cores_completed.saturating_add(1);
 
             let (level, message) = match status {
-                CoreStatus::Passed => (LogLevel::Stable, format!("Core {} stable", result.core_id)),
-                CoreStatus::Failed => {
-                    (LogLevel::Error, format!("Core {} unstable", result.core_id))
-                }
+                CoreStatus::Passed => (
+                    LogLevel::Stable,
+                    format!("Core {} stable", result.physical_core_id),
+                ),
+                CoreStatus::Failed => (
+                    LogLevel::Error,
+                    format!("Core {} unstable", result.physical_core_id),
+                ),
                 CoreStatus::Interrupted => (
                     LogLevel::Mce,
-                    format!("Core {} interrupted", result.core_id),
+                    format!("Core {} interrupted", result.physical_core_id),
                 ),
                 CoreStatus::Skipped => (
                     LogLevel::Default,
-                    format!("Core {} skipped", result.core_id),
+                    format!("Core {} skipped", result.physical_core_id),
                 ),
                 CoreStatus::Idle | CoreStatus::Testing => (
                     LogLevel::Default,
-                    format!("Core {} updated", result.core_id),
+                    format!("Core {} updated", result.physical_core_id),
                 ),
             };
 
@@ -682,7 +697,8 @@ mod tests {
         app.core_statuses.insert(0, CoreStatus::Testing);
 
         let result = CoreTestResult {
-            core_id: 0,
+            physical_core_id: 0,
+            bios_index: 0,
             logical_cpu_ids: vec![0, 1],
             status: CoreStatus::Passed,
             mprime_errors: Vec::new(),
@@ -712,7 +728,8 @@ mod tests {
         process_event(
             &mut app,
             TestEvent::CoreTestStarting {
-                core_id: 5,
+                physical_core_id: 5,
+                bios_index: 5,
                 iteration: 1,
             },
         );

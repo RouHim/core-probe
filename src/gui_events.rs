@@ -17,11 +17,13 @@ pub enum TestEvent {
         total_cores: usize,
     },
     CoreTestStarting {
-        core_id: u32,
+        physical_core_id: u32,
+        bios_index: u32,
         iteration: u32,
     },
     CoreTestProgress {
-        core_id: u32,
+        physical_core_id: u32,
+        bios_index: u32,
         elapsed_secs: u64,
         duration_secs: u64,
     },
@@ -58,15 +60,20 @@ pub fn create_cli_event_printer(receiver: EventReceiver) -> thread::JoinHandle<(
                 TestEvent::TestStarted { total_cores } => {
                     println!("Starting core stability test for {total_cores} cores");
                 }
-                TestEvent::CoreTestStarting { core_id, iteration } => {
-                    println!("Testing core {core_id:2} (iteration {iteration})");
+                TestEvent::CoreTestStarting {
+                    physical_core_id: _,
+                    bios_index,
+                    iteration,
+                } => {
+                    println!("Testing core {bios_index:2} (iteration {iteration})");
                 }
                 TestEvent::CoreTestProgress {
-                    core_id,
+                    physical_core_id: _,
+                    bios_index,
                     elapsed_secs,
                     duration_secs,
                 } => {
-                    println!("  Core {core_id:2}: {elapsed_secs}s / {duration_secs}s elapsed");
+                    println!("  Core {bios_index:2}: {elapsed_secs}s / {duration_secs}s elapsed");
                 }
                 TestEvent::CoreTestCompleted { result } => {
                     print_intermediate_result(&result);
@@ -129,20 +136,25 @@ fn format_intermediate_result(result: &CoreTestResult) -> Option<String> {
         crate::coordinator::CoreStatus::Idle
         | crate::coordinator::CoreStatus::Testing
         | crate::coordinator::CoreStatus::Skipped => None,
-        crate::coordinator::CoreStatus::Passed => {
-            Some(format!("  \u{2713} Core {:2}: STABLE", result.core_id))
-        }
-        crate::coordinator::CoreStatus::Interrupted => {
-            Some(format!("  \u{2298} Core {:2}: INTERRUPTED", result.core_id))
-        }
+        crate::coordinator::CoreStatus::Passed => Some(format!(
+            "  \u{2713} Core {:2}: STABLE",
+            result.physical_core_id
+        )),
+        crate::coordinator::CoreStatus::Interrupted => Some(format!(
+            "  \u{2298} Core {:2}: INTERRUPTED",
+            result.physical_core_id
+        )),
         crate::coordinator::CoreStatus::Failed => {
             let detail = format_error_summary(result);
             if detail.is_empty() {
-                Some(format!("  \u{2717} Core {:2}: UNSTABLE", result.core_id))
+                Some(format!(
+                    "  \u{2717} Core {:2}: UNSTABLE",
+                    result.physical_core_id
+                ))
             } else {
                 Some(format!(
                     "  \u{2717} Core {:2}: UNSTABLE \u{2014} {}",
-                    result.core_id, detail
+                    result.physical_core_id, detail
                 ))
             }
         }

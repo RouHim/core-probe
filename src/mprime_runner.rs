@@ -53,7 +53,7 @@ impl MprimeRunner {
     #[instrument(skip(self, working_dir, config), fields(core_id, working_dir = %working_dir.display()))]
     pub fn start(
         &mut self,
-        core_id: u32,
+        physical_core_id: u32,
         working_dir: &Path,
         config: Option<&MprimeConfig>,
     ) -> Result<()> {
@@ -63,9 +63,11 @@ impl MprimeRunner {
 
         let logical_cpu_id = self
             .core_map
-            .get(&core_id)
+            .get(&physical_core_id)
             .and_then(|v| v.first().copied())
-            .with_context(|| format!("physical core {core_id} not found in topology map"))?;
+            .with_context(|| {
+                format!("physical core {physical_core_id} not found in topology map")
+            })?;
 
         fs::create_dir_all(working_dir).with_context(|| {
             format!(

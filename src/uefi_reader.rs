@@ -764,7 +764,8 @@ mod tests {
         let topology = build_test_topology();
         let results = CycleResults {
             results: vec![CoreTestResult {
-                core_id: 0,
+                physical_core_id: 0,
+                bios_index: 0,
                 logical_cpu_ids: vec![0],
                 status: CoreStatus::Passed,
                 mprime_errors: Vec::new(),
@@ -815,7 +816,8 @@ mod tests {
         let results = CycleResults {
             results: vec![
                 CoreTestResult {
-                    core_id: 0,
+                    physical_core_id: 0,
+                    bios_index: 0,
                     logical_cpu_ids: vec![0],
                     status: CoreStatus::Failed,
                     mprime_errors: Vec::new(),
@@ -824,7 +826,8 @@ mod tests {
                     iterations_completed: 1,
                 },
                 CoreTestResult {
-                    core_id: 1,
+                    physical_core_id: 1,
+                    bios_index: 1,
                     logical_cpu_ids: vec![1],
                     status: CoreStatus::Passed,
                     mprime_errors: Vec::new(),
@@ -908,7 +911,8 @@ mod tests {
         let topology = build_test_topology();
         let results = CycleResults {
             results: vec![CoreTestResult {
-                core_id: 0,
+                physical_core_id: 0,
+                bios_index: 0,
                 logical_cpu_ids: vec![0],
                 status: CoreStatus::Passed,
                 mprime_errors: Vec::new(),

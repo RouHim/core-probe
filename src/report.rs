@@ -417,7 +417,10 @@ impl<'a> StabilityReport<'a> {
     fn deduplicate_results(&self) -> Vec<AggregatedCoreResult> {
         let mut by_core: BTreeMap<u32, Vec<&CoreTestResult>> = BTreeMap::new();
         for result in &self.results.results {
-            by_core.entry(result.core_id).or_default().push(result);
+            by_core
+                .entry(result.physical_core_id)
+                .or_default()
+                .push(result);
         }
 
         by_core
@@ -427,7 +430,7 @@ impl<'a> StabilityReport<'a> {
                     return None;
                 }
 
-                let core_id = entries[0].core_id;
+                let core_id = entries[0].physical_core_id;
                 let logical_cpu_ids = entries[0].logical_cpu_ids.clone();
 
                 let worst_status = entries.iter().fold(CoreStatus::Passed, |worst, entry| {
@@ -552,7 +555,8 @@ mod tests {
     fn build_test_cycle_results_stable() -> CycleResults {
         CycleResults {
             results: vec![CoreTestResult {
-                core_id: 0,
+                physical_core_id: 0,
+                bios_index: 0,
                 logical_cpu_ids: vec![0],
                 status: CoreStatus::Passed,
                 mprime_errors: Vec::new(),
@@ -626,7 +630,8 @@ mod tests {
         let results = CycleResults {
             results: vec![
                 CoreTestResult {
-                    core_id: 0,
+                    physical_core_id: 0,
+                    bios_index: 0,
                     logical_cpu_ids: vec![0],
                     status: CoreStatus::Passed,
                     mprime_errors: Vec::new(),
@@ -635,7 +640,8 @@ mod tests {
                     iterations_completed: 3,
                 },
                 CoreTestResult {
-                    core_id: 1,
+                    physical_core_id: 1,
+                    bios_index: 1,
                     logical_cpu_ids: vec![1],
                     status: CoreStatus::Passed,
                     mprime_errors: Vec::new(),
@@ -668,7 +674,8 @@ mod tests {
         let results = CycleResults {
             results: vec![
                 CoreTestResult {
-                    core_id: 0,
+                    physical_core_id: 0,
+                    bios_index: 0,
                     logical_cpu_ids: vec![0],
                     status: CoreStatus::Passed,
                     mprime_errors: Vec::new(),
@@ -677,7 +684,8 @@ mod tests {
                     iterations_completed: 3,
                 },
                 CoreTestResult {
-                    core_id: 1,
+                    physical_core_id: 1,
+                    bios_index: 1,
                     logical_cpu_ids: vec![1],
                     status: CoreStatus::Failed,
                     mprime_errors: vec![MprimeError {
@@ -713,7 +721,8 @@ mod tests {
         let topology = build_test_topology();
         let results = CycleResults {
             results: vec![CoreTestResult {
-                core_id: 0,
+                physical_core_id: 0,
+                bios_index: 0,
                 logical_cpu_ids: vec![0],
                 status: CoreStatus::Failed,
                 mprime_errors: Vec::new(),
@@ -750,7 +759,8 @@ mod tests {
         let results = CycleResults {
             results: vec![
                 CoreTestResult {
-                    core_id: 0,
+                    physical_core_id: 0,
+                    bios_index: 0,
                     logical_cpu_ids: vec![0],
                     status: CoreStatus::Passed,
                     mprime_errors: Vec::new(),
@@ -759,7 +769,8 @@ mod tests {
                     iterations_completed: 1,
                 },
                 CoreTestResult {
-                    core_id: 1,
+                    physical_core_id: 1,
+                    bios_index: 1,
                     logical_cpu_ids: vec![1],
                     status: CoreStatus::Interrupted,
                     mprime_errors: Vec::new(),
@@ -787,7 +798,8 @@ mod tests {
         let topology = build_test_topology();
         let results = CycleResults {
             results: vec![CoreTestResult {
-                core_id: 0,
+                physical_core_id: 0,
+                bios_index: 0,
                 logical_cpu_ids: vec![0],
                 status: CoreStatus::Passed,
                 mprime_errors: Vec::new(),
@@ -957,7 +969,8 @@ mod tests {
         let topology = build_test_topology();
         let results = CycleResults {
             results: vec![CoreTestResult {
-                core_id: 1,
+                physical_core_id: 1,
+                bios_index: 1,
                 logical_cpu_ids: vec![1],
                 status: CoreStatus::Failed,
                 mprime_errors: Vec::new(),
@@ -1083,7 +1096,8 @@ mod tests {
         };
         let results = CycleResults {
             results: vec![CoreTestResult {
-                core_id: 8,
+                physical_core_id: 8,
+                bios_index: 8,
                 logical_cpu_ids: vec![6, 18],
                 status: CoreStatus::Passed,
                 mprime_errors: Vec::new(),
@@ -1130,7 +1144,8 @@ mod tests {
         let results = CycleResults {
             results: vec![
                 CoreTestResult {
-                    core_id: 0,
+                    physical_core_id: 0,
+                    bios_index: 0,
                     logical_cpu_ids: vec![0],
                     status: CoreStatus::Passed,
                     mprime_errors: Vec::new(),
@@ -1139,7 +1154,8 @@ mod tests {
                     iterations_completed: 1,
                 },
                 CoreTestResult {
-                    core_id: 1,
+                    physical_core_id: 1,
+                    bios_index: 1,
                     logical_cpu_ids: vec![1],
                     status: CoreStatus::Passed,
                     mprime_errors: Vec::new(),
@@ -1168,7 +1184,8 @@ mod tests {
         let results = CycleResults {
             results: vec![
                 CoreTestResult {
-                    core_id: 0,
+                    physical_core_id: 0,
+                    bios_index: 0,
                     logical_cpu_ids: vec![0],
                     status: CoreStatus::Passed,
                     mprime_errors: Vec::new(),
@@ -1177,7 +1194,8 @@ mod tests {
                     iterations_completed: 3,
                 },
                 CoreTestResult {
-                    core_id: 0,
+                    physical_core_id: 0,
+                    bios_index: 0,
                     logical_cpu_ids: vec![0],
                     status: CoreStatus::Passed,
                     mprime_errors: Vec::new(),
@@ -1186,7 +1204,8 @@ mod tests {
                     iterations_completed: 3,
                 },
                 CoreTestResult {
-                    core_id: 0,
+                    physical_core_id: 0,
+                    bios_index: 0,
                     logical_cpu_ids: vec![0],
                     status: CoreStatus::Passed,
                     mprime_errors: Vec::new(),
@@ -1222,7 +1241,8 @@ mod tests {
         let results = CycleResults {
             results: vec![
                 CoreTestResult {
-                    core_id: 1,
+                    physical_core_id: 1,
+                    bios_index: 1,
                     logical_cpu_ids: vec![1],
                     status: CoreStatus::Passed,
                     mprime_errors: Vec::new(),
@@ -1231,7 +1251,8 @@ mod tests {
                     iterations_completed: 1,
                 },
                 CoreTestResult {
-                    core_id: 1,
+                    physical_core_id: 1,
+                    bios_index: 1,
                     logical_cpu_ids: vec![1],
                     status: CoreStatus::Failed,
                     mprime_errors: vec![error.clone()],
@@ -1240,7 +1261,8 @@ mod tests {
                     iterations_completed: 2,
                 },
                 CoreTestResult {
-                    core_id: 1,
+                    physical_core_id: 1,
+                    bios_index: 1,
                     logical_cpu_ids: vec![1],
                     status: CoreStatus::Passed,
                     mprime_errors: Vec::new(),
@@ -1269,7 +1291,8 @@ mod tests {
         let results = CycleResults {
             results: vec![
                 CoreTestResult {
-                    core_id: 2,
+                    physical_core_id: 2,
+                    bios_index: 2,
                     logical_cpu_ids: vec![2],
                     status: CoreStatus::Skipped,
                     mprime_errors: Vec::new(),
@@ -1278,7 +1301,8 @@ mod tests {
                     iterations_completed: 0,
                 },
                 CoreTestResult {
-                    core_id: 2,
+                    physical_core_id: 2,
+                    bios_index: 2,
                     logical_cpu_ids: vec![2],
                     status: CoreStatus::Skipped,
                     mprime_errors: Vec::new(),
@@ -1319,7 +1343,8 @@ mod tests {
         let results = CycleResults {
             results: vec![
                 CoreTestResult {
-                    core_id: 0,
+                    physical_core_id: 0,
+                    bios_index: 0,
                     logical_cpu_ids: vec![0],
                     status: CoreStatus::Failed,
                     mprime_errors: vec![mprime_err.clone()],
@@ -1328,7 +1353,8 @@ mod tests {
                     iterations_completed: 1,
                 },
                 CoreTestResult {
-                    core_id: 0,
+                    physical_core_id: 0,
+                    bios_index: 0,
                     logical_cpu_ids: vec![0],
                     status: CoreStatus::Failed,
                     mprime_errors: Vec::new(),
@@ -1357,7 +1383,8 @@ mod tests {
         let results = CycleResults {
             results: vec![
                 CoreTestResult {
-                    core_id: 0,
+                    physical_core_id: 0,
+                    bios_index: 0,
                     logical_cpu_ids: vec![0],
                     status: CoreStatus::Passed,
                     mprime_errors: Vec::new(),
@@ -1366,7 +1393,8 @@ mod tests {
                     iterations_completed: 1,
                 },
                 CoreTestResult {
-                    core_id: 0,
+                    physical_core_id: 0,
+                    bios_index: 0,
                     logical_cpu_ids: vec![0],
                     status: CoreStatus::Interrupted,
                     mprime_errors: Vec::new(),
@@ -1394,7 +1422,8 @@ mod tests {
         let results = CycleResults {
             results: vec![
                 CoreTestResult {
-                    core_id: 0,
+                    physical_core_id: 0,
+                    bios_index: 0,
                     logical_cpu_ids: vec![0],
                     status: CoreStatus::Passed,
                     mprime_errors: Vec::new(),
@@ -1403,7 +1432,8 @@ mod tests {
                     iterations_completed: 2,
                 },
                 CoreTestResult {
-                    core_id: 1,
+                    physical_core_id: 1,
+                    bios_index: 1,
                     logical_cpu_ids: vec![1],
                     status: CoreStatus::Passed,
                     mprime_errors: Vec::new(),
@@ -1412,7 +1442,8 @@ mod tests {
                     iterations_completed: 2,
                 },
                 CoreTestResult {
-                    core_id: 0,
+                    physical_core_id: 0,
+                    bios_index: 0,
                     logical_cpu_ids: vec![0],
                     status: CoreStatus::Passed,
                     mprime_errors: Vec::new(),
@@ -1421,7 +1452,8 @@ mod tests {
                     iterations_completed: 2,
                 },
                 CoreTestResult {
-                    core_id: 1,
+                    physical_core_id: 1,
+                    bios_index: 1,
                     logical_cpu_ids: vec![1],
                     status: CoreStatus::Passed,
                     mprime_errors: Vec::new(),
@@ -1453,7 +1485,8 @@ mod tests {
         let results = CycleResults {
             results: vec![
                 CoreTestResult {
-                    core_id: 1,
+                    physical_core_id: 1,
+                    bios_index: 1,
                     logical_cpu_ids: vec![1],
                     status: CoreStatus::Failed,
                     mprime_errors: Vec::new(),
@@ -1462,7 +1495,8 @@ mod tests {
                     iterations_completed: 1,
                 },
                 CoreTestResult {
-                    core_id: 1,
+                    physical_core_id: 1,
+                    bios_index: 1,
                     logical_cpu_ids: vec![1],
                     status: CoreStatus::Failed,
                     mprime_errors: Vec::new(),
@@ -1498,7 +1532,8 @@ mod tests {
         let results = CycleResults {
             results: vec![
                 CoreTestResult {
-                    core_id: 0,
+                    physical_core_id: 0,
+                    bios_index: 0,
                     logical_cpu_ids: vec![0],
                     status: CoreStatus::Passed,
                     mprime_errors: Vec::new(),
@@ -1507,7 +1542,8 @@ mod tests {
                     iterations_completed: 1,
                 },
                 CoreTestResult {
-                    core_id: 2,
+                    physical_core_id: 2,
+                    bios_index: 2,
                     logical_cpu_ids: vec![2],
                     status: CoreStatus::Skipped,
                     mprime_errors: Vec::new(),
@@ -1611,7 +1647,8 @@ mod tests {
         let results = CycleResults {
             results: vec![
                 CoreTestResult {
-                    core_id: 0,
+                    physical_core_id: 0,
+                    bios_index: 0,
                     logical_cpu_ids: vec![0],
                     status: CoreStatus::Failed,
                     mprime_errors: vec![MprimeError {
@@ -1625,7 +1662,8 @@ mod tests {
                     iterations_completed: 1,
                 },
                 CoreTestResult {
-                    core_id: 0,
+                    physical_core_id: 0,
+                    bios_index: 0,
                     logical_cpu_ids: vec![0],
                     status: CoreStatus::Failed,
                     mprime_errors: Vec::new(),
