@@ -462,7 +462,7 @@ fn print_startup_banner(
     let selected_cores = match core_filter {
         Some(cores) => cores
             .iter()
-            .map(u32::to_string)
+            .map(|&phys| topology.bios_index(phys).unwrap_or(phys).to_string())
             .collect::<Vec<_>>()
             .join(","),
         None => "all".to_string(),
