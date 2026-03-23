@@ -335,16 +335,17 @@ impl Coordinator {
             .position(|&c| c == core_id)
             .unwrap_or(0)
             + 1;
+        let bios_idx = topology.bios_index(core_id).unwrap_or(core_id);
         self.emit_event(TestEvent::CoreTestStarting {
             physical_core_id: core_id,
-            bios_index: topology.bios_index(core_id).unwrap_or(core_id),
+            bios_index: bios_idx,
             iteration,
         });
         self.emit_event(TestEvent::LogMessage {
             level: LogLevel::Default,
             message: format!(
                 "[{}/{}] Testing core {} \u{2014} iteration {}/{}",
-                core_index, total_cores, core_id, iteration, self.iteration_count,
+                core_index, total_cores, bios_idx, iteration, self.iteration_count,
             ),
         });
 
@@ -622,25 +623,19 @@ fn is_core_selected(core_id: u32, filter: Option<&BTreeSet<u32>>) -> bool {
 fn format_intermediate_result(result: &CoreTestResult) -> Option<String> {
     match result.status {
         CoreStatus::Idle | CoreStatus::Testing | CoreStatus::Skipped => None,
-        CoreStatus::Passed => Some(format!(
-            "  \u{2713} Core {:2}: STABLE",
-            result.physical_core_id
-        )),
+        CoreStatus::Passed => Some(format!("  \u{2713} Core {:2}: STABLE", result.bios_index)),
         CoreStatus::Interrupted => Some(format!(
             "  \u{2298} Core {:2}: INTERRUPTED",
-            result.physical_core_id
+            result.bios_index
         )),
         CoreStatus::Failed => {
             let detail = format_error_summary(result);
             if detail.is_empty() {
-                Some(format!(
-                    "  \u{2717} Core {:2}: UNSTABLE",
-                    result.physical_core_id
-                ))
+                Some(format!("  \u{2717} Core {:2}: UNSTABLE", result.bios_index))
             } else {
                 Some(format!(
                     "  \u{2717} Core {:2}: UNSTABLE \u{2014} {}",
-                    result.physical_core_id, detail
+                    result.bios_index, detail
                 ))
             }
         }
