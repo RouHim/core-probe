@@ -266,9 +266,19 @@ pub fn core_tile_view<'a>(
     co_offset: Option<i32>,
     logical_cpus: &[u32],
     is_dark: bool,
+    greyed_out: bool,
 ) -> Element<'a, Message> {
-    let bg = gui_theme::status_bg_color(status, is_dark);
-    let fg = gui_theme::status_text_color(status, is_dark);
+    let (bg, fg) = if greyed_out {
+        (
+            gui_theme::greyed_bg_color(is_dark),
+            gui_theme::greyed_text_color(is_dark),
+        )
+    } else {
+        (
+            gui_theme::status_bg_color(status, is_dark),
+            gui_theme::status_text_color(status, is_dark),
+        )
+    };
 
     let (icon, label) = match status {
         CoreStatus::Passed => ("\u{2713}", "STABLE"),
@@ -370,6 +380,7 @@ pub fn topology_grid_view<'a>(
     progress: &TestProgress,
     uefi: &Option<UefiSettings>,
     is_dark: bool,
+    selected_cores: &Option<Vec<u32>>,
 ) -> Element<'a, Message> {
     let text_primary = if is_dark {
         gui_theme::DARK_TEXT_PRIMARY
@@ -408,7 +419,10 @@ pub fn topology_grid_view<'a>(
             let co_offset = uefi
                 .as_ref()
                 .and_then(|u| u.curve_optimizer_offsets.as_ref())
-                .and_then(|m| m.get(core_id))
+                .and_then(|m| {
+                    let bios_idx = topology.bios_index(*core_id)?;
+                    m.get(&bios_idx)
+                })
                 .copied();
 
             let logical_cpus = topology
@@ -417,6 +431,10 @@ pub fn topology_grid_view<'a>(
                 .map(|v| v.as_slice())
                 .unwrap_or(&[]);
 
+            let greyed_out = selected_cores
+                .as_ref()
+                .is_some_and(|cores| !cores.contains(core_id));
+
             let tile = core_tile_view(
                 *core_id,
                 status,
@@ -424,6 +442,7 @@ pub fn topology_grid_view<'a>(
                 co_offset,
                 logical_cpus,
                 is_dark,
+                greyed_out,
             );
             tiles_row = tiles_row.push(tile);
             tile_count += 1;

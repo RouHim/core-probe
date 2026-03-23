@@ -252,7 +252,11 @@ impl<'a> StabilityReport<'a> {
         let co_part = if let Some(settings) = self.uefi_settings {
             if settings.available {
                 if let Some(offsets) = &settings.curve_optimizer_offsets {
-                    if let Some(&offset) = offsets.get(&result.core_id) {
+                    if let Some(&offset) = self
+                        .topology
+                        .bios_index(result.core_id)
+                        .and_then(|bios_idx| offsets.get(&bios_idx))
+                    {
                         let (label, use_yellow) =
                             co_offset_label(offset, result.worst_status == CoreStatus::Failed);
                         if use_yellow && use_colors {
@@ -559,6 +563,59 @@ mod tests {
             total_duration: Duration::from_secs(360),
             iterations_completed: 3,
             interrupted: false,
+        }
+    }
+
+    fn build_test_topology_5900x_like() -> CpuTopology {
+        CpuTopology {
+            vendor: "AuthenticAMD".to_string(),
+            model_name: "AMD Ryzen 9 5900X".to_string(),
+            physical_core_count: 12,
+            logical_cpu_count: 24,
+            core_map: BTreeMap::from([
+                (0, vec![0, 12]),
+                (1, vec![1, 13]),
+                (2, vec![2, 14]),
+                (3, vec![3, 15]),
+                (4, vec![4, 16]),
+                (5, vec![5, 17]),
+                (8, vec![6, 18]),
+                (9, vec![7, 19]),
+                (10, vec![8, 20]),
+                (11, vec![9, 21]),
+                (12, vec![10, 22]),
+                (13, vec![11, 23]),
+            ]),
+            bios_map: BTreeMap::from([
+                (0, 0),
+                (1, 1),
+                (2, 2),
+                (3, 3),
+                (4, 4),
+                (5, 5),
+                (8, 6),
+                (9, 7),
+                (10, 8),
+                (11, 9),
+                (12, 10),
+                (13, 11),
+            ]),
+            physical_map: BTreeMap::from([
+                (0, 0),
+                (1, 1),
+                (2, 2),
+                (3, 3),
+                (4, 4),
+                (5, 5),
+                (6, 8),
+                (7, 9),
+                (8, 10),
+                (9, 11),
+                (10, 12),
+                (11, 13),
+            ]),
+            cpu_brand: None,
+            cpu_frequency_mhz: None,
         }
     }
 
@@ -1014,6 +1071,36 @@ mod tests {
 
         // THEN: The box width remains aligned
         assert_eq!(visible_len(co_line), 66);
+    }
+
+    #[test]
+    fn given_ccd1_core_with_co_offset_when_generating_report_then_shows_co_annotation() {
+        let topology = build_test_topology_5900x_like();
+        let settings = UefiSettings {
+            available: true,
+            curve_optimizer_offsets: Some(BTreeMap::from([(6, -15)])),
+            ..Default::default()
+        };
+        let results = CycleResults {
+            results: vec![CoreTestResult {
+                core_id: 8,
+                logical_cpu_ids: vec![6, 18],
+                status: CoreStatus::Passed,
+                mprime_errors: Vec::new(),
+                mce_errors: Vec::new(),
+                duration_tested: Duration::from_secs(360),
+                iterations_completed: 1,
+            }],
+            total_duration: Duration::from_secs(360),
+            iterations_completed: 1,
+            interrupted: false,
+        };
+
+        // WHEN: Generating report
+        let report = StabilityReport::new(&results, &topology, Some(&settings));
+        let output = report.generate().expect("report generation should succeed");
+
+        assert!(output.contains("CO offset: -15"));
     }
 
     #[test]
