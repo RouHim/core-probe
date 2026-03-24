@@ -324,14 +324,20 @@ pub fn view(state: &CoreProbeApp) -> Element<'_, Message> {
         .into()
     };
 
+    let right_col = column![
+        gui_widgets::config_panel_view(&state.config, state.test_running, is_dark),
+        container(gui_widgets::log_feed_view(&state.log_entries, is_dark))
+            .height(iced::Length::Fill)
+            .width(iced::Length::Fill),
+    ]
+    .spacing(8)
+    .width(iced::Length::FillPortion(2));
+
     let mut main_col = column![
         header_row,
-        row![
-            topology_section,
-            gui_widgets::config_panel_view(&state.config, state.test_running, is_dark),
-        ]
-        .spacing(8),
-        gui_widgets::log_feed_view(&state.log_entries, is_dark),
+        row![topology_section, right_col,]
+            .spacing(8)
+            .height(iced::Length::Fill),
         gui_widgets::status_bar_view(&state.progress, state.test_running, is_dark),
     ]
     .spacing(8)

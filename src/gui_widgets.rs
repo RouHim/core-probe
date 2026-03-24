@@ -87,7 +87,15 @@ pub fn header_view<'a>(
             .width(Length::FillPortion(2)),
     };
 
-    let content = row![left, right].spacing(16).padding(Padding::from(12));
+    let theme_label = if is_dark { "\u{263e}" } else { "\u{2600}" };
+    let theme_btn = button(text(theme_label).size(18))
+        .on_press(Message::ThemeToggle)
+        .padding(Padding::from([4, 8]));
+
+    let content = row![left, right, theme_btn]
+        .spacing(16)
+        .padding(Padding::from(12))
+        .align_y(iced::Alignment::Center);
 
     container(content)
         .width(Length::Fill)
@@ -145,12 +153,12 @@ fn build_uefi_section<'a>(
             if is_dark {
                 iced::Color::from_rgb(0.16, 0.18, 0.24)
             } else {
-                iced::Color::from_rgb(0.88, 0.9, 0.97)
+                iced::Color::from_rgb(0.88, 0.90, 0.94)
             },
             if is_dark {
                 iced::Color::from_rgb(0.72, 0.78, 0.92)
             } else {
-                iced::Color::from_rgb(0.2, 0.28, 0.45)
+                iced::Color::from_rgb(0.35, 0.40, 0.52)
             },
         ),
         _ => (
@@ -344,24 +352,29 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
         );
     }
 
-    let phys_label = text(format!("phys {}", data.physical_core_id))
+    let phys_label = text(format!("Core ID {}", data.physical_core_id))
         .size(11)
         .color(secondary_color);
 
-    let status_row = container(
-        row![
-            text(icon).size(18).color(fg),
-            text(label).size(13).color(fg)
-        ]
-        .spacing(6)
-        .align_y(iced::Alignment::Center),
-    )
-    .width(Length::Fill)
-    .center_x(Length::Fill);
+    let status_row: Element<'a, Message> = if *data.status == CoreStatus::Idle {
+        Space::new().height(Length::Fixed(20.0)).into()
+    } else {
+        container(
+            row![
+                text(icon).size(18).color(fg),
+                text(label).size(13).color(fg)
+            ]
+            .spacing(6)
+            .align_y(iced::Alignment::Center),
+        )
+        .width(Length::Fill)
+        .center_x(Length::Fill)
+        .into()
+    };
 
     let mut col = column![top_row, phys_label].spacing(4);
 
-    if *data.status == CoreStatus::Testing {
+    let progress_section: Element<'a, Message> = if *data.status == CoreStatus::Testing {
         if let Some(pc) = data.per_core_progress {
             let ratio = if pc.duration_secs > 0 {
                 (pc.elapsed_secs as f32 / pc.duration_secs as f32).clamp(0.0, 1.0)
@@ -374,19 +387,23 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
                 format_time_mm_ss(pc.duration_secs)
             );
 
-            col = col.push(
-                column![
-                    container(progress_bar(0.0..=1.0, ratio)).height(Length::Fixed(6.0)),
-                    text(time_str).size(12).color(secondary_color)
-                ]
-                .spacing(4),
-            );
+            column![
+                container(progress_bar(0.0..=1.0, ratio)).height(Length::Fixed(6.0)),
+                text(time_str).size(12).color(secondary_color)
+            ]
+            .spacing(4)
+            .into()
         } else {
-            col = col.push(Space::new().height(Length::Fixed(6.0)));
+            column![Space::new().height(Length::Fixed(6.0)), text(" ").size(12)]
+                .spacing(4)
+                .into()
         }
     } else {
-        col = col.push(Space::new().height(Length::Fixed(6.0)));
-    }
+        column![Space::new().height(Length::Fixed(6.0)), text(" ").size(12)]
+            .spacing(4)
+            .into()
+    };
+    col = col.push(progress_section);
 
     if *data.status == CoreStatus::Failed {
         if let Some(err) = &data.error_summary {
@@ -555,11 +572,22 @@ pub fn topology_grid_view<'a>(
         main_col = main_col.push(ccd_section);
     }
 
+    let topo_border = if is_dark {
+        gui_theme::DARK_CARD_BORDER
+    } else {
+        gui_theme::LIGHT_CARD_BORDER
+    };
+
     container(main_col)
         .width(Length::FillPortion(3))
         .padding(Padding::from(8))
         .style(move |_theme: &iced::Theme| container::Style {
             background: Some(bg_secondary.into()),
+            border: iced::Border {
+                radius: 4.0.into(),
+                width: 1.0,
+                color: topo_border,
+            },
             ..Default::default()
         })
         .into()
@@ -706,10 +734,21 @@ pub fn config_panel_view<'a>(
     .spacing(2)
     .padding(Padding::from(12));
 
+    let border_color = if is_dark {
+        gui_theme::DARK_CARD_BORDER
+    } else {
+        gui_theme::LIGHT_CARD_BORDER
+    };
+
     container(panel)
         .width(Length::FillPortion(2))
         .style(move |_theme: &iced::Theme| container::Style {
             background: Some(bg.into()),
+            border: iced::Border {
+                radius: 4.0.into(),
+                width: 1.0,
+                color: border_color,
+            },
             ..Default::default()
         })
         .into()
@@ -761,21 +800,31 @@ pub fn log_feed_view<'a>(entries: &'a [LogEntry], is_dark: bool) -> Element<'a, 
 
     let scroll = scrollable(log_col)
         .id(iced::widget::Id::new("log_feed"))
-        .height(Length::Fixed(200.0));
+        .width(Length::Fill)
+        .height(Length::Fill);
+
+    let log_border = if is_dark {
+        gui_theme::DARK_CARD_BORDER
+    } else {
+        gui_theme::LIGHT_CARD_BORDER
+    };
 
     let section = column![
         text("Log Output").size(14).color(text_primary),
         container(scroll)
             .width(Length::Fill)
+            .padding(Padding::from(8))
             .style(move |_theme: &iced::Theme| container::Style {
                 background: Some(log_bg.into()),
                 border: iced::Border {
                     radius: 2.0.into(),
-                    ..Default::default()
+                    width: 1.0,
+                    color: log_border,
                 },
                 ..Default::default()
             }),
     ]
+    .width(Length::Fill)
     .spacing(4);
 
     section.into()
