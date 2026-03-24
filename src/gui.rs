@@ -311,18 +311,16 @@ pub fn view(state: &CoreProbeApp) -> Element<'_, Message> {
     };
 
     let header_row: Element<'_, Message> = if let Some(topology) = state.topology.as_ref() {
-        row![
-            gui_widgets::header_view(topology, &state.uefi_settings, is_dark),
-            button(text("Theme")).on_press(Message::ThemeToggle),
-        ]
-        .spacing(8)
-        .into()
+        gui_widgets::header_view(topology, &state.uefi_settings, is_dark)
     } else {
         row![
             container(text("core-probe")).width(iced::Length::Fill),
-            button(text("Theme")).on_press(Message::ThemeToggle),
+            button(text(if is_dark { "\u{263e}" } else { "\u{2600}" }).size(18))
+                .on_press(Message::ThemeToggle)
+                .padding(iced::Padding::from([4, 8])),
         ]
         .spacing(8)
+        .align_y(iced::Alignment::Center)
         .into()
     };
 
@@ -467,6 +465,8 @@ fn process_event(state: &mut CoreProbeApp, event: TestEvent) {
             state.progress.current_core = None;
             state.progress.total_cores = results.results.len();
             state.progress.cores_completed = results.results.len();
+            let (summary, body, urgency) = build_completion_notification(&results.results);
+            send_desktop_notification(&summary, &body, urgency);
         }
         TestEvent::LogMessage { level, message } => {
             append_log(state, level, message);
@@ -475,8 +475,40 @@ fn process_event(state: &mut CoreProbeApp, event: TestEvent) {
             state.error_banner = Some(message.clone());
             state.test_running = false;
             state.event_receiver = None;
-            append_log(state, LogLevel::Error, message);
+            append_log(state, LogLevel::Error, message.clone());
+            send_desktop_notification("core-probe: Test Error", &message, "critical");
         }
+    }
+}
+
+fn send_desktop_notification(summary: &str, body: &str, urgency: &str) {
+    let _ = std::process::Command::new("notify-send")
+        .args(["--urgency", urgency, summary, body])
+        .spawn();
+}
+
+fn build_completion_notification(
+    results: &[crate::coordinator::CoreTestResult],
+) -> (String, String, &'static str) {
+    let failed: Vec<usize> = results
+        .iter()
+        .filter(|r| r.status == crate::coordinator::CoreStatus::Failed)
+        .map(|r| r.bios_index as usize)
+        .collect();
+    let total = results.len();
+    if failed.is_empty() {
+        (
+            "core-probe: All cores stable".to_string(),
+            format!("{total}/{total} cores passed"),
+            "normal",
+        )
+    } else {
+        let cores: Vec<String> = failed.iter().map(|i| i.to_string()).collect();
+        (
+            format!("core-probe: {} core(s) unstable", failed.len()),
+            format!("Failed cores: {}", cores.join(", ")),
+            "critical",
+        )
     }
 }
 
@@ -941,5 +973,81 @@ mod tests {
         );
         process_event(&mut app, TestEvent::TestStarted { total_cores: 12 });
         assert!(app.core_results.is_empty());
+    }
+
+    /// BDD: Given all passed results, when building notification, then stable message is returned
+    #[test]
+    fn given_test_completed_all_passed_when_building_notification_then_message_contains_stable() {
+        use crate::coordinator::{CoreStatus, CoreTestResult};
+
+        let results = vec![
+            CoreTestResult {
+                physical_core_id: 0,
+                bios_index: 0,
+                logical_cpu_ids: vec![0, 1],
+                status: CoreStatus::Passed,
+                mprime_errors: Vec::new(),
+                mce_errors: Vec::new(),
+                duration_tested: std::time::Duration::from_secs(360),
+                iterations_completed: 3,
+            },
+            CoreTestResult {
+                physical_core_id: 1,
+                bios_index: 1,
+                logical_cpu_ids: vec![2, 3],
+                status: CoreStatus::Passed,
+                mprime_errors: Vec::new(),
+                mce_errors: Vec::new(),
+                duration_tested: std::time::Duration::from_secs(360),
+                iterations_completed: 3,
+            },
+        ];
+        let (summary, body, urgency) = build_completion_notification(&results);
+        assert!(
+            summary.contains("stable"),
+            "Expected 'stable' in summary: {summary}"
+        );
+        assert_eq!(urgency, "normal");
+        assert!(body.contains("2/2"), "Expected '2/2' in body: {body}");
+    }
+
+    /// BDD: Given mixed results, when building notification, then unstable message is returned
+    #[test]
+    fn given_test_completed_with_failures_when_building_notification_then_message_contains_unstable(
+    ) {
+        use crate::coordinator::{CoreStatus, CoreTestResult};
+
+        let results = vec![
+            CoreTestResult {
+                physical_core_id: 0,
+                bios_index: 0,
+                logical_cpu_ids: vec![0, 1],
+                status: CoreStatus::Passed,
+                mprime_errors: Vec::new(),
+                mce_errors: Vec::new(),
+                duration_tested: std::time::Duration::from_secs(360),
+                iterations_completed: 3,
+            },
+            CoreTestResult {
+                physical_core_id: 8,
+                bios_index: 6,
+                logical_cpu_ids: vec![8, 9],
+                status: CoreStatus::Failed,
+                mprime_errors: Vec::new(),
+                mce_errors: Vec::new(),
+                duration_tested: std::time::Duration::from_secs(120),
+                iterations_completed: 1,
+            },
+        ];
+        let (summary, body, urgency) = build_completion_notification(&results);
+        assert!(
+            summary.contains("unstable"),
+            "Expected 'unstable' in summary: {summary}"
+        );
+        assert_eq!(urgency, "critical");
+        assert!(
+            body.contains("6"),
+            "Expected failed bios_index '6' in body: {body}"
+        );
     }
 }
