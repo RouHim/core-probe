@@ -1,119 +1,112 @@
 # core-probe
 
-core-probe is a Linux CLI tool designed to identify unstable AMD CPU cores using the mprime (Prime95) stress test. Inspired by CoreCycler, it systematically cycles through each CPU core, runs mprime stress tests, monitors for failures via system error logs, and generates a report identifying cores that fail stability tests.
+A Linux tool that finds unstable CPU cores on AMD systems. Built for anyone tuning per-core Curve Optimizer (CO) values in BIOS — it tells you exactly which cores are failing so you know where to back off.
 
-The tool is specifically built for AMD CPU owners using BIOS Curve Optimizer (PBO) to tune per-core voltages. It provides the exact core indices needed to adjust BIOS settings, bridging the gap between Linux physical core IDs and BIOS core numbering.
+It uses mprime (Prime95) under the hood, the same stress test trusted by overclockers for decades. mprime is bundled inside the binary, so there's nothing extra to download.
 
-## BIOS Core Index Mapping
+## Why this exists
 
-AMD multi-CCD CPUs expose non-contiguous physical core IDs in Linux. For example, on a Ryzen 9 5900X:
-- CCD0 cores have physical IDs: 0, 1, 2, 3, 4, 5
-- CCD1 cores have physical IDs: 8, 9, 10, 11, 12, 13
-- IDs 6 and 7 are missing as they represent disabled cores in the 8-core CCD.
+If you're running PBO with aggressive Curve Optimizer offsets, some cores will be unstable. The hard part is figuring out *which* ones. Running Prime95 manually on each core is tedious — core-probe automates the whole process and gives you a clear pass/fail per core.
 
-The BIOS Curve Optimizer shows cores as 0-11 sequentially. If core-probe reported Linux physical IDs, a user would attempt to adjust "core 8" in BIOS but only find cores 0-11, leading to incorrect tuning.
+## Core numbering matches your BIOS
 
-### Mapping Algorithm
+This is the important part. Linux numbers your CPU cores differently than your BIOS does.
 
-core-probe solves this by mapping physical IDs to sequential BIOS indices:
+On multi-CCD chips (like the Ryzen 9 5900X), Linux skips numbers between CCDs. Your 12 cores might show up as 0–5 and 8–13 internally, with a gap where the disabled cores on each CCD would be. But your BIOS Curve Optimizer just lists them as Core 0 through Core 11, no gaps.
 
-```rust
-let bios_map: BTreeMap<u32, u32> = core_map
-    .keys()               // sorted physical IDs (BTreeMap guarantees order)
-    .enumerate()          // 0, 1, 2, ... sequential = BIOS indices
-    .map(|(idx, &phys)| (phys, idx as u32))
-    .collect();
-```
+core-probe always uses the **BIOS numbering**. When it says Core 6 failed, that's Core 6 in your BIOS Curve Optimizer — no mental translation needed.
 
-### Ryzen 9 5900X Example (12-core, 2 CCD)
+Here's what the mapping looks like on a 5900X:
 
-| BIOS Index | Physical Core ID | CCD  |
-|-----------|-----------------|------|
-| 0         | 0               | CCD0 |
-| 1         | 1               | CCD0 |
-| 2         | 2               | CCD0 |
-| 3         | 3               | CCD0 |
-| 4         | 4               | CCD0 |
-| 5         | 5               | CCD0 |
-| 6         | 8               | CCD1 |
-| 7         | 9               | CCD1 |
-| 8         | 10              | CCD1 |
-| 9         | 11              | CCD1 |
-| 10        | 12              | CCD1 |
-| 11        | 13              | CCD1 |
-
-core-probe uses BIOS indices in all user-facing output, stability reports, and the `--cores` flag. Physical core IDs are handled internally.
+| Core (BIOS / core-probe) | CCD |
+|--------------------------|-----|
+| 0                        | 0   |
+| 1                        | 0   |
+| 2                        | 0   |
+| 3                        | 0   |
+| 4                        | 0   |
+| 5                        | 0   |
+| 6                        | 1   |
+| 7                        | 1   |
+| 8                        | 1   |
+| 9                        | 1   |
+| 10                       | 1   |
+| 11                       | 1   |
 
 ## Requirements
 
 - Linux (64-bit)
-- AMD CPU (tool aborts if non-AMD detected)
-- mprime v30.19 is embedded in the binary
-- Root access is only required when using the `--uefi-only` flag to read UEFI settings
+- AMD CPU (the tool checks this and stops if it detects something else)
+- Root is only needed if you want to read UEFI/BIOS settings directly (`--uefi-only`)
 
 ## Build
 
 ```bash
-git clone <repo>
-cd core-probe
 cargo build --release
-./target/release/core-probe --help
 ```
+
+The binary ends up at `target/release/core-probe`.
 
 ## Usage
 
-```
-Usage: core-probe [-d <duration>] [-i <iterations>] [-c <cores>] [-q] [-b] [-m <mode>] [--benchmark] [--uefi-only]
-
-Options:
-  -d, --duration    duration to test each core (default: 6m)
-  -i, --iterations  number of full cycles through all cores (default: 3)
-  -c, --cores       only test specific cores by BIOS index (comma-separated, e.g. "0,2,5")
-  -q, --quiet       only output machine-readable RESULT line
-  -b, --bail        stop testing immediately when the first core fails
-  -m, --mode        stress test mode: sse, avx, avx2 (default: sse)
-  --benchmark       run FFT preset benchmark
-  --uefi-only       internal: read UEFI settings as root
-  --help            display usage information
-```
-
-### Examples
+Just run it:
 
 ```bash
-# Test all cores with defaults (6 min each, 3 cycles, SSE)
 ./core-probe
-
-# Test only BIOS cores 6, 7, 8 (CCD1 first 3 cores on 5900X)
-./core-probe --cores 6,7,8
-
-# Quick check: 1 minute per core, 1 cycle, bail on first failure
-./core-probe -d 1m -i 1 --bail
-
-# Heavy load with AVX2, quiet machine-readable output
-./core-probe -m avx2 -q
-
-# Run FFT benchmark to see throughput
-./core-probe --benchmark
 ```
 
-## Stress Test Modes
+By default it tests every core for 6 minutes each, repeating 3 full cycles, using SSE workloads. That's usually enough to catch instability.
 
-- **sse** (default): Recommended for general stability testing; works on all modern AMD CPUs.
-- **avx**: Uses AVX instructions for a heavier load.
-- **avx2**: Uses AVX2 instructions for the heaviest computational load.
+### Common scenarios
 
-## Output Format
+```bash
+# Only test specific cores (by BIOS number)
+./core-probe --cores 6,7,8
 
-The tool provides a stability report listing stable and unstable cores. In quiet mode (`-q`), it prints a machine-readable result line:
+# Quick scan: 1 minute per core, 1 cycle, stop on first failure
+./core-probe -d 1m -i 1 --bail
+
+# Heavier workload using AVX2
+./core-probe -m avx2
+
+# Machine-readable output only (for scripting)
+./core-probe -q
+```
+
+### All options
+
+| Flag | What it does | Default |
+|------|-------------|---------|
+| `-d, --duration` | How long to test each core | 6 minutes |
+| `-i, --iterations` | How many full cycles through all cores | 3 |
+| `-c, --cores` | Only test these cores (comma-separated BIOS numbers) | all |
+| `-m, --mode` | Stress test type: `sse`, `avx`, or `avx2` | `sse` |
+| `-b, --bail` | Stop immediately when any core fails | off |
+| `-q, --quiet` | Only print the machine-readable result line | off |
+| `--benchmark` | Run an FFT benchmark instead of stability test | — |
+
+### Stress test modes
+
+- **SSE** — Standard workload. Works on every modern AMD chip. Start here.
+- **AVX** — Heavier. Draws more power, generates more heat, finds more issues.
+- **AVX2** — Heaviest. If a core passes AVX2, it's solid.
+
+## Output
+
+After testing, you get a report showing which cores passed and which failed. If you use `-q` (quiet mode), you get a single machine-readable line:
 
 ```
 RESULT: PASS cores=0,1,2,3,4,5,6,7,8,9,10,11
 ```
 
-Or on failure:
+Or if something failed:
 
 ```
 RESULT: FAIL unstable=6,9
 ```
 
-All core numbers in the output are BIOS indices.
+All core numbers are always BIOS indices — the same numbers you see in your Curve Optimizer.
+
+## What to do with the results
+
+If core-probe reports a core as unstable, reduce that core's Curve Optimizer offset in BIOS. For example, if Core 6 fails, go to your BIOS CO settings, find Core 6, and reduce the negative offset (e.g., from -30 to -20). Then re-run core-probe to verify.

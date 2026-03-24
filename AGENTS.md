@@ -46,6 +46,7 @@ ALL agents MUST adhere to these constraints without exception:
    - Verify AMD processor (abort if not)
    - Map logical core IDs to physical cores
    - Handle non-contiguous core layouts (e.g., 0-5, 8-13)
+   - **BIOS Core Index Mapping**: All user-facing core numbers MUST use BIOS indices, not Linux physical core IDs. On multi-CCD AMD CPUs, physical IDs have gaps (e.g., 0-5, 8-13 on a 5900X) but the BIOS Curve Optimizer numbers cores sequentially (0-11). The mapping is: sort physical IDs → enumerate → enumeration index = BIOS index. `CpuTopology.bios_map` (physical→BIOS) and `physical_map` (BIOS→physical) handle this. Physical core IDs are internal only (CPU affinity, working dirs, tracing spans).
 
 2. **Binary Extraction & Setup**
    - Extract embedded mprime binary to temporary working directory
