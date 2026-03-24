@@ -95,6 +95,46 @@ pub const DARK_BUTTON_BG: Color = Color::from_rgb(
 pub const DARK_BUTTON_TEXT: Color = Color::WHITE;
 
 // ---------------------------------------------------------------------------
+// Card border colors
+// ---------------------------------------------------------------------------
+
+pub const DARK_CARD_BORDER: Color = Color::from_rgb(
+    0x3a as f32 / 255.0,
+    0x3a as f32 / 255.0,
+    0x3a as f32 / 255.0,
+);
+pub const LIGHT_CARD_BORDER: Color = Color::from_rgb(
+    0xd0 as f32 / 255.0,
+    0xd0 as f32 / 255.0,
+    0xd0 as f32 / 255.0,
+);
+
+// ---------------------------------------------------------------------------
+// CCD container colors
+// ---------------------------------------------------------------------------
+
+pub const DARK_CCD_BG: Color = Color::from_rgb(
+    0x18 as f32 / 255.0,
+    0x18 as f32 / 255.0,
+    0x18 as f32 / 255.0,
+);
+pub const LIGHT_CCD_BG: Color = Color::from_rgb(
+    0xf0 as f32 / 255.0,
+    0xf0 as f32 / 255.0,
+    0xf0 as f32 / 255.0,
+);
+pub const DARK_CCD_BORDER: Color = Color::from_rgb(
+    0x30 as f32 / 255.0,
+    0x30 as f32 / 255.0,
+    0x30 as f32 / 255.0,
+);
+pub const LIGHT_CCD_BORDER: Color = Color::from_rgb(
+    0xd8 as f32 / 255.0,
+    0xd8 as f32 / 255.0,
+    0xd8 as f32 / 255.0,
+);
+
+// ---------------------------------------------------------------------------
 // Light palette colors (from wireframe CSS [data-theme="light"])
 // ---------------------------------------------------------------------------
 
@@ -474,6 +514,17 @@ pub fn greyed_text_color(is_dark: bool) -> Color {
     }
 }
 
+pub fn status_border_color(status: &CoreStatus, is_dark: bool) -> Color {
+    match (status, is_dark) {
+        (CoreStatus::Failed, true) => Color::from_rgb(0.7, 0.2, 0.2),
+        (CoreStatus::Failed, false) => Color::from_rgb(0.8, 0.2, 0.2),
+        (CoreStatus::Passed, true) => Color::from_rgb(0.2, 0.5, 0.2),
+        (CoreStatus::Passed, false) => Color::from_rgb(0.2, 0.6, 0.2),
+        (_, true) => DARK_CARD_BORDER,
+        (_, false) => LIGHT_CARD_BORDER,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Log-level color helper
 // ---------------------------------------------------------------------------
@@ -655,5 +706,36 @@ mod tests {
         assert!(!matches!(modes[0], ThemeMode::Light | ThemeMode::System));
         assert!(!matches!(modes[1], ThemeMode::Dark | ThemeMode::System));
         assert!(!matches!(modes[2], ThemeMode::Dark | ThemeMode::Light));
+    }
+
+    /// BDD: Given Failed status, when querying border color, then returns red-tinted color
+    #[test]
+    fn given_failed_status_when_querying_border_color_then_returns_red_tinted() {
+        let dark_border = status_border_color(&CoreStatus::Failed, true);
+        assert_ne!(dark_border, DARK_CARD_BORDER);
+        assert!(dark_border.r > dark_border.g);
+        assert!(dark_border.r > dark_border.b);
+    }
+
+    /// BDD: Given Passed status, when querying border color, then returns green-tinted color
+    #[test]
+    fn given_passed_status_when_querying_border_color_then_returns_green_tinted() {
+        let dark_border = status_border_color(&CoreStatus::Passed, true);
+        assert_ne!(dark_border, DARK_CARD_BORDER);
+        assert!(dark_border.g > dark_border.r);
+        assert!(dark_border.g > dark_border.b);
+    }
+
+    /// BDD: Given Idle status, when querying border color, then returns default card border
+    #[test]
+    fn given_idle_status_when_querying_border_color_then_returns_default() {
+        assert_eq!(
+            status_border_color(&CoreStatus::Idle, true),
+            DARK_CARD_BORDER
+        );
+        assert_eq!(
+            status_border_color(&CoreStatus::Idle, false),
+            LIGHT_CARD_BORDER
+        );
     }
 }

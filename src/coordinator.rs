@@ -472,6 +472,13 @@ impl Coordinator {
 
             (hooks.sleep_fn)(SHUTDOWN_POLL_INTERVAL);
             elapsed += SHUTDOWN_POLL_INTERVAL;
+
+            self.emit_event(TestEvent::CoreTestProgress {
+                physical_core_id: core_id,
+                bios_index: bios_idx,
+                elapsed_secs: elapsed.as_secs(),
+                duration_secs: self.duration_per_core.as_secs(),
+            });
         }
 
         runner
@@ -748,6 +755,83 @@ mod tests {
         )?;
 
         assert_eq!(results.results[0].duration_tested, Duration::from_secs(3));
+        Ok(())
+    }
+
+    #[test]
+    fn given_event_sender_when_testing_core_then_emits_progress_events() -> Result<()> {
+        let fixture = TestFixture::new(&[(0, vec![0])])?;
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let coordinator = Coordinator::new(
+            Duration::from_secs(6),
+            1,
+            None,
+            false,
+            false,
+            Some(sender),
+            None,
+        );
+        let mut runner = FakeRunner::default();
+        let mut parser = FakeParser::default();
+        let mut monitor = FakeMceMonitor::default();
+
+        let _ = coordinator.run_with_components(
+            &fixture.topology,
+            &fixture.extracted,
+            &mut runner,
+            &mut parser,
+            &mut monitor,
+            PollHooks {
+                is_shutdown_requested: &|| false,
+                sleep_fn: &|_| {},
+            },
+        )?;
+
+        let events: Vec<TestEvent> = receiver.try_iter().collect();
+        let progress_events: Vec<&TestEvent> = events
+            .iter()
+            .filter(|e| matches!(e, TestEvent::CoreTestProgress { .. }))
+            .collect();
+
+        assert!(
+            !progress_events.is_empty(),
+            "expected at least one CoreTestProgress event"
+        );
+
+        for event in &progress_events {
+            if let TestEvent::CoreTestProgress {
+                physical_core_id,
+                bios_index,
+                duration_secs,
+                elapsed_secs,
+            } = event
+            {
+                assert_eq!(*physical_core_id, 0);
+                assert_eq!(*bios_index, 0);
+                assert_eq!(*duration_secs, 6);
+                assert!(*elapsed_secs > 0, "elapsed_secs should be > 0");
+            }
+        }
+
+        let elapsed_values: Vec<u64> = progress_events
+            .iter()
+            .filter_map(|e| {
+                if let TestEvent::CoreTestProgress { elapsed_secs, .. } = e {
+                    Some(*elapsed_secs)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for window in elapsed_values.windows(2) {
+            assert!(
+                window[1] >= window[0],
+                "elapsed_secs should be monotonically increasing: {} < {}",
+                window[1],
+                window[0]
+            );
+        }
+
         Ok(())
     }
 

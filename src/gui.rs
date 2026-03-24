@@ -8,9 +8,11 @@ use iced::{Element, Subscription, Task, Theme};
 use crate::coordinator::{Coordinator, CoreStatus};
 use crate::cpu_topology::{detect_cpu_topology, CpuTopology};
 use crate::embedded::ExtractedBinaries;
+use crate::error_parser::MprimeError;
 use crate::gui_events::{create_event_channel, EventReceiver, LogLevel, TestEvent};
 use crate::gui_theme::{dark_theme, detect_system_theme, light_theme, ThemeMode};
 use crate::gui_widgets;
+use crate::mce_monitor::MceError;
 use crate::mprime_config::StressTestMode;
 use crate::signal_handler;
 use crate::uefi_reader::UefiSettings;
@@ -48,6 +50,20 @@ pub struct TestProgress {
     pub total_cores: usize,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct PerCoreProgress {
+    pub elapsed_secs: u64,
+    pub duration_secs: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct CoreResultInfo {
+    pub mprime_errors: Vec<MprimeError>,
+    pub mce_errors: Vec<MceError>,
+    pub duration_tested: std::time::Duration,
+    pub iterations_completed: u32,
+}
+
 #[derive(Debug, Clone)]
 pub enum ConfigField {
     Duration(String),
@@ -71,6 +87,8 @@ pub struct CoreProbeApp {
     pub topology: Option<CpuTopology>,
     pub uefi_settings: Option<UefiSettings>,
     pub core_statuses: BTreeMap<u32, CoreStatus>,
+    pub core_progress: BTreeMap<u32, PerCoreProgress>,
+    pub core_results: BTreeMap<u32, CoreResultInfo>,
     pub log_entries: Vec<LogEntry>,
     pub theme_mode: ThemeMode,
     pub config: TestConfig,
@@ -121,6 +139,8 @@ pub fn boot() -> (CoreProbeApp, Task<Message>) {
         topology,
         uefi_settings,
         core_statuses,
+        core_progress: BTreeMap::new(),
+        core_results: BTreeMap::new(),
         log_entries: Vec::new(),
         theme_mode: ThemeMode::Dark,
         config: TestConfig::default(),
@@ -179,6 +199,8 @@ pub fn update(state: &mut CoreProbeApp, message: Message) -> Task<Message> {
             for status in state.core_statuses.values_mut() {
                 *status = CoreStatus::Idle;
             }
+            state.core_progress.clear();
+            state.core_results.clear();
 
             state.progress = TestProgress {
                 current_core: None,
@@ -278,6 +300,8 @@ pub fn view(state: &CoreProbeApp) -> Element<'_, Message> {
             &state.uefi_settings,
             is_dark,
             &None,
+            &state.core_progress,
+            &state.core_results,
         )
     } else {
         container(text("CPU topology unavailable"))
@@ -358,6 +382,8 @@ fn process_event(state: &mut CoreProbeApp, event: TestEvent) {
             state.progress.total_cores = total_cores;
             state.progress.cores_completed = 0;
             state.progress.current_core = None;
+            state.core_progress.clear();
+            state.core_results.clear();
         }
         TestEvent::CoreTestStarting {
             physical_core_id,
@@ -389,7 +415,14 @@ fn process_event(state: &mut CoreProbeApp, event: TestEvent) {
                     .core_statuses
                     .insert(physical_core_id, CoreStatus::Testing);
             }
-            let _ = (bios_index, elapsed_secs, duration_secs);
+            state.core_progress.insert(
+                physical_core_id,
+                PerCoreProgress {
+                    elapsed_secs,
+                    duration_secs,
+                },
+            );
+            let _ = bios_index;
         }
         TestEvent::CoreTestCompleted { result } => {
             let status = result.status.clone();
@@ -397,6 +430,16 @@ fn process_event(state: &mut CoreProbeApp, event: TestEvent) {
                 .core_statuses
                 .insert(result.physical_core_id, status.clone());
             state.progress.cores_completed = state.progress.cores_completed.saturating_add(1);
+            state.core_progress.remove(&result.physical_core_id);
+            state.core_results.insert(
+                result.physical_core_id,
+                CoreResultInfo {
+                    mprime_errors: result.mprime_errors.clone(),
+                    mce_errors: result.mce_errors.clone(),
+                    duration_tested: result.duration_tested,
+                    iterations_completed: result.iterations_completed,
+                },
+            );
 
             let bios_idx = result.bios_index;
             let (level, message) = match status {
@@ -606,6 +649,8 @@ mod tests {
             topology: None,
             uefi_settings: None,
             core_statuses: BTreeMap::new(),
+            core_progress: BTreeMap::new(),
+            core_results: BTreeMap::new(),
             log_entries: Vec::new(),
             theme_mode: ThemeMode::Dark,
             config: TestConfig::default(),
@@ -780,5 +825,121 @@ mod tests {
             Message::ConfigChanged(ConfigField::Cores(String::from("0,1,2"))),
         );
         assert_eq!(app.config.cores, "0,1,2");
+    }
+
+    /// BDD: Given CoreTestProgress event, when processed, then per-core progress stored
+    #[test]
+    fn given_core_test_progress_when_processed_then_per_core_progress_stored() {
+        let mut app = make_app();
+        app.core_statuses.insert(3, CoreStatus::Testing);
+        process_event(
+            &mut app,
+            TestEvent::CoreTestProgress {
+                physical_core_id: 3,
+                bios_index: 3,
+                elapsed_secs: 120,
+                duration_secs: 360,
+            },
+        );
+        let progress = app.core_progress.get(&3).expect("progress should exist");
+        assert_eq!(progress.elapsed_secs, 120);
+        assert_eq!(progress.duration_secs, 360);
+    }
+
+    /// BDD: Given core with progress, when CoreTestCompleted, then per-core progress removed
+    #[test]
+    fn given_core_test_completed_when_processed_then_per_core_progress_removed() {
+        let mut app = make_app();
+        app.core_progress.insert(
+            3,
+            PerCoreProgress {
+                elapsed_secs: 300,
+                duration_secs: 360,
+            },
+        );
+        app.core_statuses.insert(3, CoreStatus::Testing);
+
+        let result = CoreTestResult {
+            physical_core_id: 3,
+            bios_index: 3,
+            logical_cpu_ids: vec![3, 15],
+            status: CoreStatus::Passed,
+            mprime_errors: Vec::new(),
+            mce_errors: Vec::new(),
+            duration_tested: std::time::Duration::from_secs(360),
+            iterations_completed: 3,
+        };
+        process_event(&mut app, TestEvent::CoreTestCompleted { result });
+        assert!(app.core_progress.get(&3).is_none());
+    }
+
+    /// BDD: Given pre-existing progress, when TestStarted, then per-core progress cleared
+    #[test]
+    fn given_test_started_when_processed_then_per_core_progress_cleared() {
+        let mut app = make_app();
+        app.core_progress.insert(
+            0,
+            PerCoreProgress {
+                elapsed_secs: 100,
+                duration_secs: 360,
+            },
+        );
+        process_event(&mut app, TestEvent::TestStarted { total_cores: 12 });
+        assert!(app.core_progress.is_empty());
+    }
+
+    /// BDD: Given CoreTestCompleted with errors, when processed, then result info stored
+    #[test]
+    fn given_core_test_completed_with_errors_when_processed_then_result_info_stored() {
+        use crate::error_parser::{MprimeError, MprimeErrorType};
+
+        let mut app = make_app();
+        app.core_statuses.insert(5, CoreStatus::Testing);
+
+        let result = CoreTestResult {
+            physical_core_id: 5,
+            bios_index: 5,
+            logical_cpu_ids: vec![5, 17],
+            status: CoreStatus::Failed,
+            mprime_errors: vec![MprimeError {
+                error_type: MprimeErrorType::RoundoffError,
+                message: String::from("ROUNDOFF > 0.40"),
+                fft_size: Some(448),
+                timestamp: None,
+            }],
+            mce_errors: Vec::new(),
+            duration_tested: std::time::Duration::from_secs(120),
+            iterations_completed: 1,
+        };
+        process_event(&mut app, TestEvent::CoreTestCompleted { result });
+
+        let info = app.core_results.get(&5).expect("result info should exist");
+        assert_eq!(info.mprime_errors.len(), 1);
+        assert_eq!(info.mprime_errors[0].fft_size, Some(448));
+        assert_eq!(info.iterations_completed, 1);
+    }
+
+    /// BDD: Given pre-existing results, when TestStarted, then core results cleared
+    #[test]
+    fn given_test_started_when_processed_then_core_results_cleared() {
+        use crate::error_parser::{MprimeError, MprimeErrorType};
+
+        let mut app = make_app();
+        app.core_results.insert(
+            0,
+            CoreResultInfo {
+                mprime_errors: vec![MprimeError {
+                    error_type: MprimeErrorType::HardwareFailure,
+                    message: String::from("Hardware failure"),
+                    fft_size: None,
+                    timestamp: None,
+                }],
+                mce_errors: Vec::new(),
+                duration_tested: std::time::Duration::from_secs(60),
+                iterations_completed: 1,
+            },
+        );
+        process_event(&mut app, TestEvent::TestStarted { total_cores: 12 });
+        assert!(app.core_results.is_empty());
     }
 }

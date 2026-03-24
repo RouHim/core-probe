@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use iced::widget::grid;
 use iced::widget::tooltip::Position as TooltipPosition;
 use iced::widget::{
     button, column, container, pick_list, progress_bar, row, scrollable, text, text_input, tooltip,
@@ -9,7 +10,10 @@ use iced::{Element, Length, Padding};
 
 use crate::coordinator::CoreStatus;
 use crate::cpu_topology::CpuTopology;
-use crate::gui::{ConfigField, LogEntry, Message, TestConfig, TestProgress};
+use crate::error_parser::{MprimeError, MprimeErrorType};
+use crate::gui::{
+    ConfigField, CoreResultInfo, LogEntry, Message, PerCoreProgress, TestConfig, TestProgress,
+};
 use crate::gui_events::LogLevel;
 use crate::gui_theme;
 use crate::mprime_config::StressTestMode;
@@ -256,33 +260,69 @@ fn build_limits_row<'a>(limits: &PboLimits, color: iced::Color) -> Element<'a, M
 }
 
 // ---------------------------------------------------------------------------
+// format_error_summary
+// ---------------------------------------------------------------------------
+
+pub fn format_error_summary(errors: &[MprimeError]) -> Option<String> {
+    let first = errors.first()?;
+    let label = match first.error_type {
+        MprimeErrorType::RoundoffError => "ROUNDOFF",
+        MprimeErrorType::HardwareFailure => "HW FAIL",
+        MprimeErrorType::FatalError => "FATAL",
+        MprimeErrorType::IllegalSumout => "SUMOUT",
+        MprimeErrorType::SumMismatch => "SUM ERR",
+        MprimeErrorType::TortureTestFailed => "TORTURE FAIL",
+        MprimeErrorType::TortureTestSummaryError => "ERRORS",
+        MprimeErrorType::PossibleHardwareFailure => "HW FAIL?",
+        MprimeErrorType::Unknown => "ERROR",
+    };
+    match first.fft_size {
+        Some(fft) => Some(format!("{label} @ {fft}K")),
+        None => Some(label.to_string()),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // core_tile_view
 // ---------------------------------------------------------------------------
 
-#[allow(clippy::too_many_arguments)]
-pub fn core_tile_view<'a>(
-    core_id: u32,
-    bios_index: u32,
-    status: &CoreStatus,
-    progress: Option<f32>,
-    co_offset: Option<i32>,
-    logical_cpus: &[u32],
-    is_dark: bool,
-    greyed_out: bool,
-) -> Element<'a, Message> {
-    let (bg, fg) = if greyed_out {
+pub struct CoreTileData<'a> {
+    pub bios_index: u32,
+    pub physical_core_id: u32,
+    pub status: &'a CoreStatus,
+    pub co_offset: Option<i32>,
+    pub per_core_progress: Option<&'a PerCoreProgress>,
+    pub error_summary: Option<String>,
+    pub is_dark: bool,
+    pub greyed_out: bool,
+}
+
+fn format_time_mm_ss(secs: u64) -> String {
+    format!("{}:{:02}", secs / 60, secs % 60)
+}
+
+pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
+    let (bg, fg) = if data.greyed_out {
         (
-            gui_theme::greyed_bg_color(is_dark),
-            gui_theme::greyed_text_color(is_dark),
+            gui_theme::greyed_bg_color(data.is_dark),
+            gui_theme::greyed_text_color(data.is_dark),
         )
     } else {
         (
-            gui_theme::status_bg_color(status, is_dark),
-            gui_theme::status_text_color(status, is_dark),
+            gui_theme::status_bg_color(data.status, data.is_dark),
+            gui_theme::status_text_color(data.status, data.is_dark),
         )
     };
 
-    let (icon, label) = match status {
+    let secondary_color = if data.greyed_out {
+        gui_theme::greyed_text_color(data.is_dark)
+    } else if data.is_dark {
+        gui_theme::DARK_TEXT_SECONDARY
+    } else {
+        gui_theme::LIGHT_TEXT_SECONDARY
+    };
+
+    let (icon, label) = match data.status {
         CoreStatus::Passed => ("\u{2713}", "STABLE"),
         CoreStatus::Failed => ("\u{2717}", "UNSTABLE"),
         CoreStatus::Testing => ("\u{25b6}", "TESTING"),
@@ -291,29 +331,56 @@ pub fn core_tile_view<'a>(
         CoreStatus::Interrupted => ("\u{26a0}", "INTERRUPTED"),
     };
 
-    let phys_color = if greyed_out {
-        gui_theme::greyed_text_color(is_dark)
-    } else if is_dark {
-        gui_theme::DARK_TEXT_SECONDARY
-    } else {
-        gui_theme::LIGHT_TEXT_SECONDARY
-    };
-
-    let mut col = column![
-        text(format!("Core {bios_index}")).size(16).color(fg),
-        text(format!("phys {core_id}")).size(11).color(phys_color),
-        row![
-            text(icon).size(14).color(fg),
-            text(label).size(12).color(fg),
-        ]
-        .spacing(4),
+    let mut top_row = row![
+        text(format!("Core {}", data.bios_index)).size(22).color(fg),
+        Space::new().width(Length::Fill)
     ]
-    .spacing(4);
+    .align_y(iced::Alignment::Center);
+    if let Some(offset) = data.co_offset {
+        top_row = top_row.push(
+            text(format!("CO: {offset}"))
+                .size(13)
+                .color(secondary_color),
+        );
+    }
 
-    // Progress bar for Testing cores (always reserve space to keep tile height consistent)
-    if *status == CoreStatus::Testing {
-        if let Some(val) = progress {
-            col = col.push(container(progress_bar(0.0..=1.0, val)).height(Length::Fixed(6.0)));
+    let phys_label = text(format!("phys {}", data.physical_core_id))
+        .size(11)
+        .color(secondary_color);
+
+    let status_row = container(
+        row![
+            text(icon).size(18).color(fg),
+            text(label).size(13).color(fg)
+        ]
+        .spacing(6)
+        .align_y(iced::Alignment::Center),
+    )
+    .width(Length::Fill)
+    .center_x(Length::Fill);
+
+    let mut col = column![top_row, phys_label].spacing(4);
+
+    if *data.status == CoreStatus::Testing {
+        if let Some(pc) = data.per_core_progress {
+            let ratio = if pc.duration_secs > 0 {
+                (pc.elapsed_secs as f32 / pc.duration_secs as f32).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let time_str = format!(
+                "{} / {}",
+                format_time_mm_ss(pc.elapsed_secs),
+                format_time_mm_ss(pc.duration_secs)
+            );
+
+            col = col.push(
+                column![
+                    container(progress_bar(0.0..=1.0, ratio)).height(Length::Fixed(6.0)),
+                    text(time_str).size(12).color(secondary_color)
+                ]
+                .spacing(4),
+            );
         } else {
             col = col.push(Space::new().height(Length::Fixed(6.0)));
         }
@@ -321,29 +388,34 @@ pub fn core_tile_view<'a>(
         col = col.push(Space::new().height(Length::Fixed(6.0)));
     }
 
-    // CO offset
-    if let Some(offset) = co_offset {
-        col = col.push(text(format!("CO: {offset}")).size(11).color(fg));
+    if *data.status == CoreStatus::Failed {
+        if let Some(err) = &data.error_summary {
+            col = col.push(text(err.clone()).size(12).color(secondary_color));
+        } else {
+            col = col.push(Space::new().height(Length::Fixed(14.0)));
+        }
+    } else {
+        col = col.push(Space::new().height(Length::Fixed(14.0)));
     }
 
-    // Logical CPUs
-    if !logical_cpus.is_empty() {
-        let cpus_str = logical_cpus
-            .iter()
-            .map(u32::to_string)
-            .collect::<Vec<_>>()
-            .join(",");
-        col = col.push(text(format!("CPUs: {cpus_str}")).size(11).color(fg));
-    }
+    col = col.push(status_row);
+
+    let border_color = gui_theme::status_border_color(data.status, data.is_dark);
+    let border_width = if *data.status == CoreStatus::Failed {
+        2.0
+    } else {
+        1.0
+    };
 
     container(col)
-        .width(Length::Fixed(180.0))
-        .padding(Padding::from(8))
+        .width(Length::Fill)
+        .padding(Padding::from([10, 12]))
         .style(move |_theme: &iced::Theme| container::Style {
             background: Some(bg.into()),
             border: iced::Border {
-                radius: 4.0.into(),
-                ..Default::default()
+                radius: 6.0.into(),
+                width: border_width,
+                color: border_color,
             },
             ..Default::default()
         })
@@ -385,13 +457,16 @@ pub fn group_cores_by_ccd(core_map: &BTreeMap<u32, Vec<u32>>) -> Vec<(String, Ve
 // topology_grid_view
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 pub fn topology_grid_view<'a>(
     topology: &'a CpuTopology,
-    statuses: &BTreeMap<u32, CoreStatus>,
-    progress: &TestProgress,
+    statuses: &'a BTreeMap<u32, CoreStatus>,
+    _progress: &TestProgress,
     uefi: &Option<UefiSettings>,
     is_dark: bool,
     selected_cores: &Option<Vec<u32>>,
+    core_progress: &'a BTreeMap<u32, PerCoreProgress>,
+    core_results: &'a BTreeMap<u32, CoreResultInfo>,
 ) -> Element<'a, Message> {
     let text_primary = if is_dark {
         gui_theme::DARK_TEXT_PRIMARY
@@ -409,23 +484,14 @@ pub fn topology_grid_view<'a>(
 
     for (ccd_label, core_ids) in ccd_groups {
         let label = text(ccd_label).size(14).color(text_primary);
-        let mut tiles_row = row![].spacing(8);
-        let mut tile_count = 0;
-        let mut rows_col = column![].spacing(8);
+
+        let mut grid = grid::Grid::new()
+            .fluid(200.0)
+            .height(grid::Sizing::EvenlyDistribute(Length::Shrink))
+            .spacing(8.0);
 
         for core_id in &core_ids {
             let status = statuses.get(core_id).unwrap_or(&CoreStatus::Idle);
-            let core_progress = if *status == CoreStatus::Testing {
-                progress.current_core.filter(|&c| c == *core_id).and(Some(
-                    if progress.total_cores > 0 {
-                        progress.cores_completed as f32 / progress.total_cores as f32
-                    } else {
-                        0.0
-                    },
-                ))
-            } else {
-                None
-            };
 
             let co_offset = uefi
                 .as_ref()
@@ -436,44 +502,56 @@ pub fn topology_grid_view<'a>(
                 })
                 .copied();
 
-            let logical_cpus = topology
-                .core_map
-                .get(core_id)
-                .map(|v| v.as_slice())
-                .unwrap_or(&[]);
-
             let greyed_out = selected_cores
                 .as_ref()
                 .is_some_and(|cores| !cores.contains(core_id));
 
             let bios_idx = topology.bios_index(*core_id).unwrap_or(*core_id);
 
-            let tile = core_tile_view(
-                *core_id,
-                bios_idx,
+            let per_core = core_progress.get(core_id);
+            let error_summary = core_results
+                .get(core_id)
+                .and_then(|info| format_error_summary(&info.mprime_errors));
+
+            let tile_data = CoreTileData {
+                bios_index: bios_idx,
+                physical_core_id: *core_id,
                 status,
-                core_progress,
                 co_offset,
-                logical_cpus,
+                per_core_progress: per_core,
+                error_summary,
                 is_dark,
                 greyed_out,
-            );
-            tiles_row = tiles_row.push(tile);
-            tile_count += 1;
+            };
 
-            // Wrap after every 4 tiles
-            if tile_count % 4 == 0 {
-                rows_col = rows_col.push(tiles_row);
-                tiles_row = row![].spacing(8);
-            }
+            grid = grid.push(core_tile_view(&tile_data));
         }
 
-        // Push remaining tiles
-        if tile_count % 4 != 0 {
-            rows_col = rows_col.push(tiles_row);
-        }
+        let ccd_bg = if is_dark {
+            gui_theme::DARK_CCD_BG
+        } else {
+            gui_theme::LIGHT_CCD_BG
+        };
+        let ccd_border = if is_dark {
+            gui_theme::DARK_CCD_BORDER
+        } else {
+            gui_theme::LIGHT_CCD_BORDER
+        };
 
-        let ccd_section = column![label, rows_col].spacing(6);
+        let grid_container = container(grid)
+            .width(Length::Fill)
+            .padding(Padding::from(10))
+            .style(move |_theme: &iced::Theme| container::Style {
+                background: Some(ccd_bg.into()),
+                border: iced::Border {
+                    radius: 8.0.into(),
+                    width: 1.0,
+                    color: ccd_border,
+                },
+                ..Default::default()
+            });
+
+        let ccd_section = column![label, grid_container].spacing(6);
         main_col = main_col.push(ccd_section);
     }
 
@@ -883,5 +961,58 @@ mod tests {
     fn given_missing_or_unrecognized_pbo_status_when_classifying_badge_then_returns_unknown() {
         assert_eq!(classify_pbo_badge(None), "PBO: UNKNOWN");
         assert_eq!(classify_pbo_badge(Some("Custom profile")), "PBO: UNKNOWN");
+    }
+
+    /// BDD: Given roundoff error with FFT, when formatting, then shows label and FFT
+    #[test]
+    fn given_roundoff_error_with_fft_when_formatting_then_shows_label_and_fft() {
+        let errors = vec![MprimeError {
+            error_type: MprimeErrorType::RoundoffError,
+            message: String::from("ROUNDOFF > 0.40"),
+            fft_size: Some(448),
+            timestamp: None,
+        }];
+        assert_eq!(
+            format_error_summary(&errors),
+            Some("ROUNDOFF @ 448K".into())
+        );
+    }
+
+    /// BDD: Given hardware failure without FFT, when formatting, then shows label only
+    #[test]
+    fn given_hardware_failure_without_fft_when_formatting_then_shows_label_only() {
+        let errors = vec![MprimeError {
+            error_type: MprimeErrorType::HardwareFailure,
+            message: String::from("Hardware failure detected"),
+            fft_size: None,
+            timestamp: None,
+        }];
+        assert_eq!(format_error_summary(&errors), Some("HW FAIL".into()));
+    }
+
+    /// BDD: Given empty errors, when formatting, then returns None
+    #[test]
+    fn given_empty_errors_when_formatting_then_returns_none() {
+        assert_eq!(format_error_summary(&[]), None);
+    }
+
+    /// BDD: Given multiple errors, when formatting, then uses first
+    #[test]
+    fn given_multiple_errors_when_formatting_then_uses_first() {
+        let errors = vec![
+            MprimeError {
+                error_type: MprimeErrorType::FatalError,
+                message: String::from("FATAL ERROR"),
+                fft_size: Some(1024),
+                timestamp: None,
+            },
+            MprimeError {
+                error_type: MprimeErrorType::RoundoffError,
+                message: String::from("ROUNDOFF"),
+                fft_size: Some(448),
+                timestamp: None,
+            },
+        ];
+        assert_eq!(format_error_summary(&errors), Some("FATAL @ 1024K".into()));
     }
 }
