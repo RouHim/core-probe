@@ -690,7 +690,6 @@ pub fn topology_grid_view<'a>(
 
     container(main_col)
         .width(Length::FillPortion(3))
-        .height(Length::Fill)
         .padding(Padding::from(8))
         .style(move |_theme: &iced::Theme| container::Style {
             background: Some(bg_secondary.into()),
