@@ -212,6 +212,7 @@ impl Coordinator {
         let mut results = Vec::new();
         let mut interrupted = false;
         let mut completed_iterations = 0;
+        let mut failed_cores: BTreeSet<u32> = BTreeSet::new();
 
         'iterations: for iteration in 0..self.iteration_count {
             let iteration_span = info_span!("iteration", iteration = iteration + 1);
@@ -235,6 +236,10 @@ impl Coordinator {
                         duration_tested: Duration::ZERO,
                         iterations_completed: iteration + 1,
                     });
+                    continue;
+                }
+
+                if failed_cores.contains(core_id) {
                     continue;
                 }
 
@@ -264,6 +269,9 @@ impl Coordinator {
                 self.emit_event(TestEvent::CoreTestCompleted {
                     result: result.clone(),
                 });
+                if failed {
+                    failed_cores.insert(result.physical_core_id);
+                }
                 results.push(result);
 
                 if self.bail && failed {
@@ -1588,5 +1596,46 @@ mod tests {
         assert!(line.contains('\u{2298}'));
         assert!(line.contains("INTERRUPTED"));
         assert!(line.contains("Core 11"));
+    }
+
+    #[test]
+    fn given_core_failure_in_first_iteration_when_multiple_iterations_then_skips_failed_core(
+    ) -> Result<()> {
+        // GIVEN: Two cores, core 0 fails in iteration 1, 3 iterations total
+        let fixture = TestFixture::new(&[(0, vec![0]), (1, vec![1])])?;
+        fixture.write_results(1, 0, "FATAL ERROR: instability detected\n")?;
+        let coordinator =
+            Coordinator::new(Duration::from_secs(6), 3, None, false, false, None, None);
+        let mut runner = FakeRunner::default();
+        let mut parser = FakeParser::default();
+        let mut monitor = FakeMceMonitor::default();
+
+        // WHEN: Running the full cycle
+        let results = coordinator.run_with_components(
+            &fixture.topology,
+            &fixture.extracted,
+            &mut runner,
+            &mut parser,
+            &mut monitor,
+            PollHooks {
+                is_shutdown_requested: &|| false,
+                sleep_fn: &|_| {},
+            },
+        )?;
+
+        // THEN: Core 0 tested once (failed), core 1 tested 3 times (passed each iteration)
+        assert!(!results.interrupted);
+        assert_eq!(results.iterations_completed, 3);
+        // Core 0: 1 result (Failed), Core 1: 3 results (Passed × 3) = 4 total
+        assert_eq!(results.results.len(), 4);
+        assert_eq!(results.results[0].physical_core_id, 0);
+        assert_eq!(results.results[0].status, CoreStatus::Failed);
+        for i in 1..=3 {
+            assert_eq!(results.results[i].physical_core_id, 1);
+            assert_eq!(results.results[i].status, CoreStatus::Passed);
+        }
+        // Core 0 was only started once, core 1 was started 3 times
+        assert_eq!(runner.start_order, vec![0, 1, 1, 1]);
+        Ok(())
     }
 }

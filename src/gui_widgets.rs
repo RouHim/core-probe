@@ -367,15 +367,7 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
                 .into();
         col = col.push(progress_section);
 
-        if *data.status == CoreStatus::Failed {
-            if let Some(err) = &data.error_summary {
-                col = col.push(text(err.clone()).size(12).color(secondary_color));
-            } else {
-                col = col.push(Space::new().height(Length::Fixed(14.0)));
-            }
-        } else {
-            col = col.push(Space::new().height(Length::Fixed(14.0)));
-        }
+        col = col.push(Space::new().height(Length::Fixed(14.0)));
 
         col = col.push(status_row);
 
@@ -457,8 +449,6 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
     let physical_core_id = data.physical_core_id;
     let co_offset = data.co_offset;
     let status = data.status.clone();
-    let error_summary = data.error_summary.clone();
-
     AnimationBuilder::new(
         ((bg, fg, border_color, secondary_color), ratio),
         move |((bg, fg, border_color, secondary_color), ratio)| {
@@ -517,15 +507,7 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
             };
             col = col.push(progress_section);
 
-            if status == CoreStatus::Failed {
-                if let Some(err) = &error_summary {
-                    col = col.push(text(err.clone()).size(12).color(secondary_color));
-                } else {
-                    col = col.push(Space::new().height(Length::Fixed(14.0)));
-                }
-            } else {
-                col = col.push(Space::new().height(Length::Fixed(14.0)));
-            }
+            col = col.push(Space::new().height(Length::Fixed(14.0)));
 
             col = col.push(status_row);
 

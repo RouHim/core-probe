@@ -4,10 +4,11 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use regex::Regex;
+use time::OffsetDateTime;
 use tracing::{info, warn};
 
 use crate::cpu_topology::CpuTopology;
@@ -101,7 +102,7 @@ impl MceMonitor {
 
         let thread_handle = thread::spawn(move || {
             info!("starting MCE/EDAC journalctl monitor thread");
-            let mut last_check_time = unix_timestamp_seconds();
+            let mut last_check_time = journalctl_since_now();
 
             while !shutdown.load(Ordering::Relaxed) {
                 match fetcher(&last_check_time) {
@@ -134,7 +135,7 @@ impl MceMonitor {
                     }
                 }
 
-                last_check_time = unix_timestamp_seconds();
+                last_check_time = journalctl_since_now();
 
                 let mut waited = Duration::ZERO;
                 while waited < poll_interval {
@@ -285,7 +286,7 @@ fn extract_timestamp(line: &str) -> String {
     if let Some((prefix, _)) = line.split_once(" kernel:") {
         return prefix.trim().to_string();
     }
-    unix_timestamp_seconds()
+    current_local_timestamp_string()
 }
 
 fn extract_apic_id(line: &str) -> Option<u32> {
@@ -350,11 +351,30 @@ fn is_journalctl_unavailable_or_permission_denied(error_text: &str) -> bool {
         || error.contains("failed to execute journalctl")
 }
 
-fn unix_timestamp_seconds() -> String {
-    match SystemTime::now().duration_since(UNIX_EPOCH) {
-        Ok(duration) => duration.as_secs().to_string(),
-        Err(_) => "0".to_string(),
-    }
+fn journalctl_since_now() -> String {
+    let now = OffsetDateTime::now_utc();
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        now.year(),
+        u8::from(now.month()),
+        now.day(),
+        now.hour(),
+        now.minute(),
+        now.second()
+    )
+}
+
+fn current_local_timestamp_string() -> String {
+    let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        now.year(),
+        u8::from(now.month()),
+        now.day(),
+        now.hour(),
+        now.minute(),
+        now.second()
+    )
 }
 
 fn machine_check_regex() -> Option<&'static Regex> {

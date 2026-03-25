@@ -27,6 +27,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use argh::FromArgs;
 use tracing::{error, info, instrument, warn};
+use tracing_subscriber::fmt::time::LocalTime;
 
 use coordinator::{Coordinator, CoreStatus};
 use cpu_topology::{detect_cpu_topology, CpuTopology};
@@ -76,7 +77,11 @@ struct Args {
 }
 
 fn main() {
-    tracing_subscriber::fmt::init();
+    let timer = LocalTime::rfc_3339();
+    tracing_subscriber::fmt()
+        .with_timer(timer)
+        .with_writer(std::io::stderr)
+        .init();
 
     let exit_code = match run() {
         Ok(code) => code,

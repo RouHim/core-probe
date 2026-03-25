@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
 use std::sync::mpsc::TryRecvError;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
+use iced::keyboard::{self, key};
 use iced::widget::{button, column, container, row, text};
 use iced::{Element, Subscription, Task, Theme};
+use time::OffsetDateTime;
 
 use crate::coordinator::{Coordinator, CoreStatus};
 use crate::cpu_topology::{detect_cpu_topology, CpuTopology};
@@ -81,6 +83,8 @@ pub enum Message {
     EventReceived(TestEvent),
     Tick,
     DismissError,
+    FocusNext,
+    FocusPrevious,
 }
 
 pub struct CoreProbeApp {
@@ -284,6 +288,12 @@ pub fn update(state: &mut CoreProbeApp, message: Message) -> Task<Message> {
         Message::DismissError => {
             state.error_banner = None;
         }
+        Message::FocusNext => {
+            return iced::widget::operation::focus_next();
+        }
+        Message::FocusPrevious => {
+            return iced::widget::operation::focus_previous();
+        }
     }
 
     Task::none()
@@ -326,6 +336,7 @@ pub fn view(state: &CoreProbeApp) -> Element<'_, Message> {
 
     let right_col = column![
         gui_widgets::config_panel_view(&state.config, state.test_running, is_dark),
+        gui_widgets::status_bar_view(&state.progress, state.test_running, is_dark),
         container(gui_widgets::log_feed_view(&state.log_entries, is_dark))
             .height(iced::Length::Fill)
             .width(iced::Length::Fill),
@@ -338,7 +349,6 @@ pub fn view(state: &CoreProbeApp) -> Element<'_, Message> {
         row![topology_section, right_col,]
             .spacing(8)
             .height(iced::Length::Fill),
-        gui_widgets::status_bar_view(&state.progress, state.test_running, is_dark),
     ]
     .spacing(8)
     .padding(8);
@@ -365,7 +375,23 @@ pub fn view(state: &CoreProbeApp) -> Element<'_, Message> {
 }
 
 pub fn subscription(_state: &CoreProbeApp) -> Subscription<Message> {
-    iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick)
+    Subscription::batch([
+        iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick),
+        iced::event::listen_with(|event, _status, _window| match event {
+            iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(key::Named::Tab),
+                modifiers,
+                ..
+            }) => {
+                if modifiers.shift() {
+                    Some(Message::FocusPrevious)
+                } else {
+                    Some(Message::FocusNext)
+                }
+            }
+            _ => None,
+        }),
+    ])
 }
 
 pub fn theme(state: &CoreProbeApp) -> Theme {
@@ -532,16 +558,8 @@ fn append_log(state: &mut CoreProbeApp, level: LogLevel, message: String) {
 }
 
 fn current_time_label() -> String {
-    let seconds_since_midnight = match SystemTime::now().duration_since(UNIX_EPOCH) {
-        Ok(duration) => duration.as_secs() % 86_400,
-        Err(_) => 0,
-    };
-
-    let hour = seconds_since_midnight / 3_600;
-    let minute = (seconds_since_midnight % 3_600) / 60;
-    let second = seconds_since_midnight % 60;
-
-    format!("{hour:02}:{minute:02}:{second:02}")
+    let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+    format!("{:02}:{:02}:{:02}", now.hour(), now.minute(), now.second())
 }
 
 fn parse_duration(input: &str) -> Duration {
@@ -671,7 +689,7 @@ pub fn run_gui() -> iced::Result {
         .title("core-probe — CPU Stability Tester")
         .subscription(subscription)
         .theme(theme)
-        .window_size(iced::Size::new(1400.0, 900.0))
+        .window_size(iced::Size::new(1400.0, 800.0))
         .centered()
         .run()
 }
@@ -908,7 +926,7 @@ mod tests {
             iterations_completed: 3,
         };
         process_event(&mut app, TestEvent::CoreTestCompleted { result });
-        assert!(app.core_progress.get(&3).is_none());
+        assert!(!app.core_progress.contains_key(&3));
     }
 
     /// BDD: Given pre-existing progress, when TestStarted, then per-core progress cleared

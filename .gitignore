@@ -1,4 +1,8 @@
 /target
 *.swp
-.sisyphus/evidence/
-.sisyphus/notepads/
+.sisyphus/
+.idea/
+mprime-latest/
+replace.py
+replace.sh
+replace_idle.py
