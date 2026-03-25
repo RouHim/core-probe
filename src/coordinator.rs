@@ -200,7 +200,7 @@ impl Coordinator {
             .start(topology)
             .context("failed to start MCE monitor thread")?;
 
-        let all_cores: Vec<u32> = order_cores_alternate(&topology.core_map);
+        let all_cores: Vec<u32> = ordered_cores_for_run(topology, self.core_filter.as_ref());
         self.emit_event(TestEvent::TestStarted {
             total_cores: all_cores.len(),
         });
@@ -587,6 +587,14 @@ fn order_cores_alternate(core_map: &std::collections::BTreeMap<u32, Vec<u32>>) -
     }
 
     ordered
+}
+
+fn ordered_cores_for_run(topology: &CpuTopology, core_filter: Option<&Vec<u32>>) -> Vec<u32> {
+    if let Some(selected) = core_filter {
+        return selected.clone();
+    }
+
+    order_cores_alternate(&topology.core_map)
 }
 
 fn collect_new_errors<P, M>(
@@ -1038,10 +1046,44 @@ mod tests {
         )?;
 
         assert_eq!(runner.start_order, vec![0, 2]);
-        assert_eq!(results.results.len(), 3);
-        assert_eq!(results.results[1].status, CoreStatus::Skipped);
+        assert_eq!(results.results.len(), 2);
         assert_eq!(results.results[0].status, CoreStatus::Passed);
-        assert_eq!(results.results[2].status, CoreStatus::Passed);
+        assert_eq!(results.results[1].status, CoreStatus::Passed);
+        Ok(())
+    }
+
+    #[test]
+    fn given_core_filter_in_user_order_when_running_then_tests_exact_input_order() -> Result<()> {
+        let fixture = TestFixture::new(&[(0, vec![0]), (1, vec![1]), (2, vec![2])])?;
+        let coordinator = Coordinator::new(
+            Duration::from_secs(1),
+            1,
+            Some(vec![2, 0]),
+            false,
+            false,
+            None,
+            None,
+        );
+        let mut runner = FakeRunner::default();
+        let mut parser = FakeParser::default();
+        let mut monitor = FakeMceMonitor::default();
+
+        let results = coordinator.run_with_components(
+            &fixture.topology,
+            &fixture.extracted,
+            &mut runner,
+            &mut parser,
+            &mut monitor,
+            PollHooks {
+                is_shutdown_requested: &|| false,
+                sleep_fn: &|_| {},
+            },
+        )?;
+
+        assert_eq!(runner.start_order, vec![2, 0]);
+        assert_eq!(results.results.len(), 2);
+        assert_eq!(results.results[0].physical_core_id, 2);
+        assert_eq!(results.results[1].physical_core_id, 0);
         Ok(())
     }
 

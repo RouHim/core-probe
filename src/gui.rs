@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::mpsc::TryRecvError;
 use std::time::Duration;
 
@@ -335,7 +335,12 @@ pub fn view(state: &CoreProbeApp) -> Element<'_, Message> {
     };
 
     let right_col = column![
-        gui_widgets::config_panel_view(&state.config, state.test_running, is_dark),
+        gui_widgets::config_panel_view(
+            &state.config,
+            state.test_running,
+            is_dark,
+            state.topology.as_ref()
+        ),
         gui_widgets::status_bar_view(&state.progress, state.test_running, is_dark),
         container(gui_widgets::log_feed_view(&state.log_entries, is_dark))
             .height(iced::Length::Fill)
@@ -562,7 +567,7 @@ fn current_time_label() -> String {
     format!("{:02}:{:02}:{:02}", now.hour(), now.minute(), now.second())
 }
 
-fn parse_duration(input: &str) -> Duration {
+pub(crate) fn parse_duration(input: &str) -> Duration {
     let fallback = Duration::from_secs(360);
     let trimmed = input.trim();
 
@@ -654,8 +659,8 @@ fn parse_core_filter(input: &str, topology: &CpuTopology) -> Result<Option<Vec<u
         return Ok(None);
     }
 
-    bios_indices.sort_unstable();
-    bios_indices.dedup();
+    let mut seen = BTreeSet::new();
+    bios_indices.retain(|idx| seen.insert(*idx));
 
     let max_bios_index = topology.core_map.len() as u32;
     let invalid: Vec<u32> = bios_indices
@@ -698,6 +703,7 @@ pub fn run_gui() -> iced::Result {
 mod tests {
     use super::*;
     use crate::coordinator::{CoreStatus, CoreTestResult};
+    use crate::cpu_topology::CpuTopology;
     use crate::gui_events::{LogLevel, TestEvent};
 
     fn make_app() -> CoreProbeApp {
@@ -716,6 +722,50 @@ mod tests {
             event_receiver: None,
             extracted_binaries: None,
         }
+    }
+
+    fn topology_with_non_contiguous_physical_ids() -> CpuTopology {
+        let mut core_map = BTreeMap::new();
+        for id in [0_u32, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13] {
+            core_map.insert(id, vec![id * 2, id * 2 + 1]);
+        }
+        let bios_map: BTreeMap<u32, u32> = core_map
+            .keys()
+            .enumerate()
+            .map(|(i, &p)| (p, i as u32))
+            .collect();
+        let physical_map: BTreeMap<u32, u32> = bios_map.iter().map(|(&p, &b)| (b, p)).collect();
+        CpuTopology {
+            vendor: "AuthenticAMD".to_string(),
+            model_name: "AMD Ryzen 9 5900X".to_string(),
+            physical_core_count: 12,
+            logical_cpu_count: 24,
+            core_map,
+            bios_map,
+            physical_map,
+            cpu_brand: None,
+            cpu_frequency_mhz: None,
+        }
+    }
+
+    #[test]
+    fn given_gui_core_filter_reverse_indices_when_parsing_then_preserves_user_input_order() {
+        let topology = topology_with_non_contiguous_physical_ids();
+
+        let parsed = parse_core_filter("7,6", &topology)
+            .expect("valid GUI core filter should parse successfully");
+
+        assert_eq!(parsed, Some(vec![9, 8]));
+    }
+
+    #[test]
+    fn given_gui_core_filter_duplicates_when_parsing_then_keeps_first_occurrence_order() {
+        let topology = topology_with_non_contiguous_physical_ids();
+
+        let parsed = parse_core_filter("6,7,6,7,8", &topology)
+            .expect("duplicate GUI core filter entries should dedup in first-seen order");
+
+        assert_eq!(parsed, Some(vec![8, 9, 10]));
     }
 
     /// BDD: Given app with error banner, when DismissError, then error_banner cleared

@@ -21,6 +21,7 @@ pub mod report;
 pub mod signal_handler;
 pub mod uefi_reader;
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::time::Duration;
 
@@ -317,8 +318,8 @@ fn parse_core_filter(cores: Option<&str>, topology: &CpuTopology) -> Result<Opti
         bail!("--cores was provided but no valid BIOS core indices were found");
     }
 
-    bios_indices.sort_unstable();
-    bios_indices.dedup();
+    let mut seen = BTreeSet::new();
+    bios_indices.retain(|idx| seen.insert(*idx));
 
     let max_bios_index = topology.core_map.len() as u32;
     let invalid: Vec<u32> = bios_indices
@@ -732,6 +733,46 @@ mod tests {
             .expect("BIOS indices 6,7 should map to physical cores 8,9");
 
         assert_eq!(parsed, Some(vec![8, 9]));
+    }
+
+    #[test]
+    fn given_reverse_bios_indices_when_parsing_then_preserves_user_entered_order() {
+        let mut core_map = BTreeMap::new();
+        for id in [0_u32, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13] {
+            core_map.insert(id, vec![id * 2, id * 2 + 1]);
+        }
+        let bios_map: BTreeMap<u32, u32> = core_map
+            .keys()
+            .enumerate()
+            .map(|(i, &p)| (p, i as u32))
+            .collect();
+        let physical_map: BTreeMap<u32, u32> = bios_map.iter().map(|(&p, &b)| (b, p)).collect();
+        let topology = CpuTopology {
+            vendor: "AuthenticAMD".to_string(),
+            model_name: "AMD Ryzen 9 5900X".to_string(),
+            physical_core_count: 12,
+            logical_cpu_count: 24,
+            core_map,
+            bios_map,
+            physical_map,
+            cpu_brand: None,
+            cpu_frequency_mhz: None,
+        };
+
+        let parsed = parse_core_filter(Some("7,6"), &topology)
+            .expect("BIOS indices 7,6 should preserve order and map to physical cores 9,8");
+
+        assert_eq!(parsed, Some(vec![9, 8]));
+    }
+
+    #[test]
+    fn given_duplicate_bios_indices_when_parsing_then_keeps_first_occurrence_order() {
+        let topology = test_topology();
+
+        let parsed = parse_core_filter(Some("2,0,2,1,0"), &topology)
+            .expect("duplicate BIOS indices should be deduplicated while preserving order");
+
+        assert_eq!(parsed, Some(vec![5, 0, 1]));
     }
 
     #[test]

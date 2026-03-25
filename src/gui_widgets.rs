@@ -14,7 +14,7 @@ use crate::coordinator::CoreStatus;
 use crate::cpu_topology::CpuTopology;
 use crate::error_parser::{MprimeError, MprimeErrorType};
 use crate::gui::{
-    ConfigField, CoreResultInfo, LogEntry, Message, PerCoreProgress, TestConfig, TestProgress,
+    self, ConfigField, CoreResultInfo, LogEntry, Message, PerCoreProgress, TestConfig, TestProgress,
 };
 use crate::gui_events::LogLevel;
 use crate::gui_theme;
@@ -686,6 +686,50 @@ pub fn topology_grid_view<'a>(
 }
 
 // ---------------------------------------------------------------------------
+// format_estimated_runtime
+// ---------------------------------------------------------------------------
+
+fn format_estimated_runtime(config: &TestConfig, topology: Option<&CpuTopology>) -> String {
+    let core_count = estimate_core_count(config, topology);
+    if core_count == 0 {
+        return String::new();
+    }
+    let per_core_secs = gui::parse_duration(&config.duration).as_secs();
+    let total_secs = core_count as u64 * per_core_secs * config.iterations as u64;
+    format_duration_label(total_secs)
+}
+
+fn estimate_core_count(config: &TestConfig, topology: Option<&CpuTopology>) -> usize {
+    let trimmed = config.cores.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("all") {
+        return topology.map_or(0, |t| t.core_map.len());
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for token in trimmed.split(',') {
+        let token = token.trim();
+        if !token.is_empty() {
+            seen.insert(token);
+        }
+    }
+    seen.len()
+}
+
+fn format_duration_label(total_secs: u64) -> String {
+    if total_secs == 0 {
+        return String::new();
+    }
+    let hours = total_secs / 3600;
+    let minutes = (total_secs % 3600).div_ceil(60);
+    if hours > 0 && minutes > 0 {
+        format!("~{hours}h {minutes}m")
+    } else if hours > 0 {
+        format!("~{hours}h")
+    } else {
+        format!("~{minutes}m")
+    }
+}
+
+// ---------------------------------------------------------------------------
 // config_panel_view
 // ---------------------------------------------------------------------------
 
@@ -693,6 +737,7 @@ pub fn config_panel_view<'a>(
     config: &'a TestConfig,
     test_running: bool,
     is_dark: bool,
+    topology: Option<&CpuTopology>,
 ) -> Element<'a, Message> {
     let text_primary = if is_dark {
         gui_theme::DARK_TEXT_PRIMARY
@@ -821,7 +866,21 @@ pub fn config_panel_view<'a>(
         cores_label,
         cores_input,
         Space::new().height(12),
-        action_button,
+        {
+            let estimation = format_estimated_runtime(config, topology);
+            if estimation.is_empty() {
+                row![action_button]
+                    .align_y(iced::Alignment::Center)
+                    .spacing(8)
+            } else {
+                row![
+                    action_button,
+                    text(estimation).size(13).color(text_secondary),
+                ]
+                .align_y(iced::Alignment::Center)
+                .spacing(8)
+            }
+        },
     ]
     .spacing(2)
     .padding(Padding::from(12));
@@ -1159,5 +1218,86 @@ mod tests {
             },
         ];
         assert_eq!(format_error_summary(&errors), Some("FATAL @ 1024K".into()));
+    }
+
+    // GIVEN zero seconds WHEN formatting duration THEN returns empty string
+    #[test]
+    fn given_zero_seconds_when_formatting_then_empty() {
+        assert_eq!(format_duration_label(0), "");
+    }
+
+    // GIVEN seconds under one hour WHEN formatting duration THEN returns ~Xm
+    #[test]
+    fn given_minutes_only_when_formatting_then_shows_minutes() {
+        assert_eq!(format_duration_label(360), "~6m");
+        assert_eq!(format_duration_label(2160), "~36m");
+    }
+
+    // GIVEN seconds over one hour WHEN formatting duration THEN returns ~Xh Ym
+    #[test]
+    fn given_hours_and_minutes_when_formatting_then_shows_both() {
+        assert_eq!(format_duration_label(7800), "~2h 10m");
+    }
+
+    // GIVEN exact hours WHEN formatting duration THEN returns ~Xh
+    #[test]
+    fn given_exact_hours_when_formatting_then_shows_hours_only() {
+        assert_eq!(format_duration_label(3600), "~1h");
+    }
+
+    // GIVEN config with 12 cores, 6m duration, 3 iterations WHEN estimating THEN returns ~3h 36m
+    #[test]
+    fn given_all_cores_config_when_estimating_then_shows_total() {
+        let topo = make_test_topology(12);
+        let config = TestConfig {
+            duration: "6m".into(),
+            iterations: 3,
+            mode: StressTestMode::default(),
+            cores: "all".into(),
+        };
+        assert_eq!(format_estimated_runtime(&config, Some(&topo)), "~3h 36m");
+    }
+
+    // GIVEN config with specific cores WHEN estimating THEN counts only those cores
+    #[test]
+    fn given_specific_cores_when_estimating_then_counts_filtered() {
+        let topo = make_test_topology(12);
+        let config = TestConfig {
+            duration: "6m".into(),
+            iterations: 1,
+            mode: StressTestMode::default(),
+            cores: "0,2,5".into(),
+        };
+        assert_eq!(format_estimated_runtime(&config, Some(&topo)), "~18m");
+    }
+
+    // GIVEN no topology WHEN estimating with "all" cores THEN returns empty
+    #[test]
+    fn given_no_topology_when_estimating_all_then_empty() {
+        let config = TestConfig {
+            duration: "6m".into(),
+            iterations: 3,
+            mode: StressTestMode::default(),
+            cores: "all".into(),
+        };
+        assert_eq!(format_estimated_runtime(&config, None), "");
+    }
+
+    fn make_test_topology(core_count: u32) -> CpuTopology {
+        let mut core_map = BTreeMap::new();
+        for i in 0..core_count {
+            core_map.insert(i, vec![i, i + core_count]);
+        }
+        CpuTopology {
+            vendor: String::from("AuthenticAMD"),
+            model_name: String::from("Test CPU"),
+            core_map,
+            physical_core_count: core_count as usize,
+            logical_cpu_count: core_count as usize * 2,
+            bios_map: BTreeMap::new(),
+            physical_map: BTreeMap::new(),
+            cpu_brand: None,
+            cpu_frequency_mhz: None,
+        }
     }
 }
