@@ -7,6 +7,8 @@ use iced::widget::{
     Space,
 };
 use iced::{Element, Length, Padding};
+use iced_anim::spring::Motion;
+use iced_anim::AnimationBuilder;
 
 use crate::coordinator::CoreStatus;
 use crate::cpu_topology::CpuTopology;
@@ -310,24 +312,136 @@ fn format_time_mm_ss(secs: u64) -> String {
 }
 
 pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
-    let (bg, fg) = if data.greyed_out {
-        (
-            gui_theme::greyed_bg_color(data.is_dark),
-            gui_theme::greyed_text_color(data.is_dark),
-        )
-    } else {
-        (
-            gui_theme::status_bg_color(data.status, data.is_dark),
-            gui_theme::status_text_color(data.status, data.is_dark),
-        )
-    };
+    if data.greyed_out {
+        let bg = gui_theme::greyed_bg_color(data.is_dark);
+        let fg = gui_theme::greyed_text_color(data.is_dark);
+        let secondary_color = gui_theme::greyed_text_color(data.is_dark);
 
-    let secondary_color = if data.greyed_out {
-        gui_theme::greyed_text_color(data.is_dark)
-    } else if data.is_dark {
+        let (icon, label) = match data.status {
+            CoreStatus::Passed => ("\u{2713}", "STABLE"),
+            CoreStatus::Failed => ("\u{2717}", "UNSTABLE"),
+            CoreStatus::Testing => ("\u{25b6}", "TESTING"),
+            CoreStatus::Skipped => ("\u{2298}", "SKIPPED"),
+            CoreStatus::Idle => ("\u{25cb}", "IDLE"),
+            CoreStatus::Interrupted => ("\u{26a0}", "INTERRUPTED"),
+        };
+
+        let mut top_row = row![
+            text(format!("Core {}", data.bios_index)).size(22).color(fg),
+            Space::new().width(Length::Fill)
+        ]
+        .align_y(iced::Alignment::Center);
+        if let Some(offset) = data.co_offset {
+            top_row = top_row.push(
+                text(format!("CO: {offset}"))
+                    .size(13)
+                    .color(secondary_color),
+            );
+        }
+
+        let phys_label = text(format!("Core ID {}", data.physical_core_id))
+            .size(11)
+            .color(secondary_color);
+
+        let status_row: Element<'a, Message> = if *data.status == CoreStatus::Idle {
+            Space::new().height(Length::Fixed(20.0)).into()
+        } else {
+            container(
+                row![
+                    text(icon).size(18).color(fg),
+                    text(label).size(13).color(fg)
+                ]
+                .spacing(6)
+                .align_y(iced::Alignment::Center),
+            )
+            .width(Length::Fill)
+            .center_x(Length::Fill)
+            .into()
+        };
+
+        let mut col = column![top_row, phys_label].spacing(4);
+
+        let progress_section: Element<'a, Message> =
+            column![Space::new().height(Length::Fixed(6.0)), text(" ").size(12)]
+                .spacing(4)
+                .into();
+        col = col.push(progress_section);
+
+        if *data.status == CoreStatus::Failed {
+            if let Some(err) = &data.error_summary {
+                col = col.push(text(err.clone()).size(12).color(secondary_color));
+            } else {
+                col = col.push(Space::new().height(Length::Fixed(14.0)));
+            }
+        } else {
+            col = col.push(Space::new().height(Length::Fixed(14.0)));
+        }
+
+        col = col.push(status_row);
+
+        let border_color = gui_theme::status_border_color(data.status, data.is_dark);
+        let border_width = if *data.status == CoreStatus::Failed {
+            2.0
+        } else {
+            1.0
+        };
+
+        return container(col)
+            .width(Length::Fill)
+            .padding(Padding::from([10, 12]))
+            .style(move |_theme: &iced::Theme| container::Style {
+                background: Some(bg.into()),
+                border: iced::Border {
+                    radius: 6.0.into(),
+                    width: border_width,
+                    color: border_color,
+                },
+                ..Default::default()
+            })
+            .into();
+    }
+
+    let bg = gui_theme::status_bg_color(data.status, data.is_dark);
+    let fg = gui_theme::status_text_color(data.status, data.is_dark);
+    let secondary_color = if data.is_dark {
         gui_theme::DARK_TEXT_SECONDARY
     } else {
         gui_theme::LIGHT_TEXT_SECONDARY
+    };
+    let border_color = gui_theme::status_border_color(data.status, data.is_dark);
+
+    let ratio: f32 = if *data.status == CoreStatus::Testing {
+        if let Some(pc) = data.per_core_progress {
+            if pc.duration_secs > 0 {
+                (pc.elapsed_secs as f32 / pc.duration_secs as f32).clamp(0.0, 1.0)
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    };
+
+    let time_str = if *data.status == CoreStatus::Testing {
+        if let Some(pc) = data.per_core_progress {
+            format!(
+                "{} / {}",
+                format_time_mm_ss(pc.elapsed_secs),
+                format_time_mm_ss(pc.duration_secs)
+            )
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
+
+    let border_width: f32 = if *data.status == CoreStatus::Failed {
+        2.0
+    } else {
+        1.0
     };
 
     let (icon, label) = match data.status {
@@ -339,104 +453,100 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
         CoreStatus::Interrupted => ("\u{26a0}", "INTERRUPTED"),
     };
 
-    let mut top_row = row![
-        text(format!("Core {}", data.bios_index)).size(22).color(fg),
-        Space::new().width(Length::Fill)
-    ]
-    .align_y(iced::Alignment::Center);
-    if let Some(offset) = data.co_offset {
-        top_row = top_row.push(
-            text(format!("CO: {offset}"))
-                .size(13)
-                .color(secondary_color),
-        );
-    }
+    let bios_index = data.bios_index;
+    let physical_core_id = data.physical_core_id;
+    let co_offset = data.co_offset;
+    let status = data.status.clone();
+    let error_summary = data.error_summary.clone();
 
-    let phys_label = text(format!("Core ID {}", data.physical_core_id))
-        .size(11)
-        .color(secondary_color);
-
-    let status_row: Element<'a, Message> = if *data.status == CoreStatus::Idle {
-        Space::new().height(Length::Fixed(20.0)).into()
-    } else {
-        container(
-            row![
-                text(icon).size(18).color(fg),
-                text(label).size(13).color(fg)
+    AnimationBuilder::new(
+        ((bg, fg, border_color, secondary_color), ratio),
+        move |((bg, fg, border_color, secondary_color), ratio)| {
+            let mut top_row = row![
+                text(format!("Core {}", bios_index)).size(22).color(fg),
+                Space::new().width(Length::Fill)
             ]
-            .spacing(6)
-            .align_y(iced::Alignment::Center),
-        )
-        .width(Length::Fill)
-        .center_x(Length::Fill)
-        .into()
-    };
+            .align_y(iced::Alignment::Center);
+            if let Some(offset) = co_offset {
+                top_row = top_row.push(
+                    text(format!("CO: {offset}"))
+                        .size(13)
+                        .color(secondary_color),
+                );
+            }
 
-    let mut col = column![top_row, phys_label].spacing(4);
+            let phys_label = text(format!("Core ID {}", physical_core_id))
+                .size(11)
+                .color(secondary_color);
 
-    let progress_section: Element<'a, Message> = if *data.status == CoreStatus::Testing {
-        if let Some(pc) = data.per_core_progress {
-            let ratio = if pc.duration_secs > 0 {
-                (pc.elapsed_secs as f32 / pc.duration_secs as f32).clamp(0.0, 1.0)
+            let status_row: Element<'_, Message> = if status == CoreStatus::Idle {
+                Space::new().height(Length::Fixed(20.0)).into()
             } else {
-                0.0
-            };
-            let time_str = format!(
-                "{} / {}",
-                format_time_mm_ss(pc.elapsed_secs),
-                format_time_mm_ss(pc.duration_secs)
-            );
-
-            column![
-                container(progress_bar(0.0..=1.0, ratio)).height(Length::Fixed(6.0)),
-                text(time_str).size(12).color(secondary_color)
-            ]
-            .spacing(4)
-            .into()
-        } else {
-            column![Space::new().height(Length::Fixed(6.0)), text(" ").size(12)]
-                .spacing(4)
+                container(
+                    row![
+                        text(icon).size(18).color(fg),
+                        text(label).size(13).color(fg)
+                    ]
+                    .spacing(6)
+                    .align_y(iced::Alignment::Center),
+                )
+                .width(Length::Fill)
+                .center_x(Length::Fill)
                 .into()
-        }
-    } else {
-        column![Space::new().height(Length::Fixed(6.0)), text(" ").size(12)]
-            .spacing(4)
-            .into()
-    };
-    col = col.push(progress_section);
+            };
 
-    if *data.status == CoreStatus::Failed {
-        if let Some(err) = &data.error_summary {
-            col = col.push(text(err.clone()).size(12).color(secondary_color));
-        } else {
-            col = col.push(Space::new().height(Length::Fixed(14.0)));
-        }
-    } else {
-        col = col.push(Space::new().height(Length::Fixed(14.0)));
-    }
+            let mut col = column![top_row, phys_label].spacing(4);
 
-    col = col.push(status_row);
+            let progress_section: Element<'_, Message> = if status == CoreStatus::Testing {
+                if !time_str.is_empty() {
+                    column![
+                        container(progress_bar(0.0..=1.0, ratio)).height(Length::Fixed(6.0)),
+                        text(time_str.clone()).size(12).color(secondary_color)
+                    ]
+                    .spacing(4)
+                    .into()
+                } else {
+                    column![Space::new().height(Length::Fixed(6.0)), text(" ").size(12)]
+                        .spacing(4)
+                        .into()
+                }
+            } else {
+                column![Space::new().height(Length::Fixed(6.0)), text(" ").size(12)]
+                    .spacing(4)
+                    .into()
+            };
+            col = col.push(progress_section);
 
-    let border_color = gui_theme::status_border_color(data.status, data.is_dark);
-    let border_width = if *data.status == CoreStatus::Failed {
-        2.0
-    } else {
-        1.0
-    };
+            if status == CoreStatus::Failed {
+                if let Some(err) = &error_summary {
+                    col = col.push(text(err.clone()).size(12).color(secondary_color));
+                } else {
+                    col = col.push(Space::new().height(Length::Fixed(14.0)));
+                }
+            } else {
+                col = col.push(Space::new().height(Length::Fixed(14.0)));
+            }
 
-    container(col)
-        .width(Length::Fill)
-        .padding(Padding::from([10, 12]))
-        .style(move |_theme: &iced::Theme| container::Style {
-            background: Some(bg.into()),
-            border: iced::Border {
-                radius: 6.0.into(),
-                width: border_width,
-                color: border_color,
-            },
-            ..Default::default()
-        })
-        .into()
+            col = col.push(status_row);
+
+            container(col)
+                .width(Length::Fill)
+                .padding(Padding::from([10, 12]))
+                .style(move |_theme: &iced::Theme| container::Style {
+                    background: Some(bg.into()),
+                    border: iced::Border {
+                        radius: 6.0.into(),
+                        width: border_width,
+                        color: border_color,
+                    },
+                    ..Default::default()
+                })
+                .into()
+        },
+    )
+    .animates_layout(false)
+    .animation(Motion::SMOOTH)
+    .into()
 }
 
 // ---------------------------------------------------------------------------
@@ -580,6 +690,7 @@ pub fn topology_grid_view<'a>(
 
     container(main_col)
         .width(Length::FillPortion(3))
+        .height(Length::Fill)
         .padding(Padding::from(8))
         .style(move |_theme: &iced::Theme| container::Style {
             background: Some(bg_secondary.into()),
