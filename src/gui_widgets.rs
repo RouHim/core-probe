@@ -1001,9 +1001,13 @@ pub fn status_bar_view<'a>(
             .size(12)
             .color(text_primary)
             .width(Length::FillPortion(2)),
-        container(progress_bar(0.0..=1.0, ratio))
-            .height(Length::Fixed(8.0))
-            .width(Length::FillPortion(3)),
+        container(
+            AnimationBuilder::new(ratio, |r| { progress_bar(0.0..=1.0, r).into() })
+                .animates_layout(false)
+                .animation(Motion::SMOOTH)
+        )
+        .height(Length::Fixed(8.0))
+        .width(Length::FillPortion(3)),
         text(progress_info)
             .size(12)
             .color(text_secondary)
