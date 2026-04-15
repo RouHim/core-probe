@@ -563,8 +563,8 @@ fn process_event(state: &mut CoreProbeApp, event: TestEvent) {
                     &state.core_results,
                     &state.core_statuses,
                     topology,
-                    Duration::from_secs(0),
-                    state.config.iterations,
+                    results.total_duration,
+                    results.iterations_completed,
                     results.interrupted,
                 )
             });
@@ -1172,8 +1172,8 @@ mod tests {
             .modal_content
             .as_ref()
             .expect("expected modal content after completed test");
-        assert_eq!(modal.iterations_completed, 5);
-        assert_eq!(modal.total_duration, Duration::from_secs(0));
+        assert_eq!(modal.iterations_completed, 1);
+        assert_eq!(modal.total_duration, Duration::from_secs(120));
         assert_eq!(modal.qr_content, "Failed BIOS cores: 0");
     }
 

@@ -169,4 +169,9 @@ mod tests {
 
         assert!(matrix.size <= 41);
     }
+
+    #[test]
+    fn test_qr_code_view_returns_element() {
+        let _elem = qr_code_view("Failed BIOS cores: 2, 5, 8", true, 6.0);
+    }
 }
