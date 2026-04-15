@@ -17,7 +17,7 @@ use crate::gui_modal;
 use crate::gui_qr;
 use crate::gui_theme::{dark_theme, detect_system_theme, light_theme, ThemeMode};
 use crate::gui_widgets;
-use crate::mce_monitor::MceError;
+use crate::mce_monitor::{MceError, MceErrorType};
 use crate::mprime_config::StressTestMode;
 use crate::signal_handler;
 use crate::uefi_reader::UefiSettings;
@@ -660,8 +660,7 @@ pub fn build_modal_content(
             continue;
         }
 
-        let mut error_summary = gui_widgets::format_error_summary(&result.mprime_errors)
-            .unwrap_or_else(|| String::from("ERROR"));
+        let mut error_summary = build_error_summary(result);
         if topology.is_none() {
             error_summary.push_str(" (physical ID)");
         }
@@ -716,6 +715,20 @@ fn derive_ccd_index(topology: Option<&CpuTopology>, physical_core_id: u32) -> u3
     }
 
     0
+}
+
+fn build_error_summary(result: &CoreResultInfo) -> String {
+    gui_widgets::format_error_summary(&result.mprime_errors)
+        .or_else(|| {
+            result.mce_errors.first().map(|mce| match mce.error_type {
+                MceErrorType::MachineCheck => String::from("MCE"),
+                MceErrorType::HardwareError => String::from("HW ERROR"),
+                MceErrorType::EdacCorrectable => String::from("EDAC CORR"),
+                MceErrorType::EdacUncorrectable => String::from("EDAC UNCORR"),
+                MceErrorType::Unknown => String::from("MCE ERROR"),
+            })
+        })
+        .unwrap_or_else(|| String::from("ERROR"))
 }
 
 fn append_log(state: &mut CoreProbeApp, level: LogLevel, message: String) {
@@ -1460,6 +1473,45 @@ mod tests {
 
         assert_eq!(modal.unstable_cores[0].bios_index, 0);
         assert_eq!(modal.unstable_cores[0].ccd_index, 0);
+    }
+
+    #[test]
+    fn test_build_modal_content_mce_only_shows_error_type() {
+        let topology = topology_with_non_contiguous_physical_ids();
+        let mut core_results = BTreeMap::new();
+        let mut core_statuses = BTreeMap::new();
+
+        core_statuses.insert(8, CoreStatus::Passed);
+        core_results.insert(
+            8,
+            CoreResultInfo {
+                mprime_errors: Vec::new(),
+                mce_errors: vec![crate::mce_monitor::MceError {
+                    cpu_id: 8,
+                    bank: None,
+                    error_type: crate::mce_monitor::MceErrorType::MachineCheck,
+                    message: String::from("MCE"),
+                    timestamp: String::from("2026-01-01T00:00:00Z"),
+                    apic_id: None,
+                }],
+                duration_tested: Duration::from_secs(120),
+                iterations_completed: 1,
+            },
+        );
+
+        let modal = build_modal_content(
+            &core_results,
+            &core_statuses,
+            Some(&topology),
+            Duration::from_secs(120),
+            1,
+            false,
+        )
+        .expect("modal content should exist");
+
+        assert_eq!(modal.unstable_cores.len(), 1);
+        assert_eq!(modal.unstable_cores[0].error_summary, "MCE");
+        assert_ne!(modal.unstable_cores[0].error_summary, "ERROR");
     }
 
     #[test]
