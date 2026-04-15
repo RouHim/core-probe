@@ -181,5 +181,11 @@ Recommendation: mprime is the proven standard for CPU stability detection. Alter
 
 ---
 
-**Last Updated:** Task 2 - AGENTS.md Creation  
-**Compliance:** All constraints from mprime-rust-task.md integrated
+## Learnings
+
+**Iced modal pattern:** Use `stack! + opaque() + mouse_area() + center()` for blocking modal dialogs in Iced 0.14 (see `src/gui_modal.rs`). The `float` widget is for non-blocking overlays (badges/tooltips) — NOT modals.
+
+**fast_qr API:** `QRBuilder::new(content.as_bytes().to_vec()).build()` returns `QRCode`; access modules as `qr_code[row][col].value()` (bool). Add `qr_code` crate as dev-dep for round-trip decode tests (`qr_code::decode::SimpleGrid` + `Grid::new(grid).decode()`).
+
+**`build_modal_content` topology fallback:** Signature is `topology: Option<&CpuTopology>`. When `None`, physical core IDs are used as `bios_index` and `" (physical ID)"` is appended to `error_summary`. MCE-only failures use `build_error_summary()` helper (not `format_error_summary`) to show real MCE type labels.
+
