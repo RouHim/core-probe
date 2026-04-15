@@ -9,6 +9,7 @@ pub mod embedded;
 pub mod error_parser;
 pub mod gui;
 pub mod gui_events;
+pub mod gui_modal;
 pub mod gui_qr;
 pub mod gui_theme;
 pub mod gui_widgets;

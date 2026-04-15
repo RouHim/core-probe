@@ -6,6 +6,7 @@ use iced::keyboard::{self, key};
 use iced::widget::{button, column, container, row, text};
 use iced::{Element, Subscription, Task, Theme};
 use time::OffsetDateTime;
+use tracing::{info, warn};
 
 use crate::coordinator::{Coordinator, CoreStatus};
 use crate::cpu_topology::{detect_cpu_topology, CpuTopology};
@@ -66,6 +67,22 @@ pub struct CoreResultInfo {
     pub iterations_completed: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModalCoreResult {
+    pub bios_index: u32,
+    pub error_summary: String,
+    pub ccd_index: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModalContent {
+    pub unstable_cores: Vec<ModalCoreResult>,
+    pub stable_core_indices: Vec<u32>,
+    pub total_duration: Duration,
+    pub iterations_completed: u32,
+    pub qr_content: String,
+}
+
 #[derive(Debug, Clone)]
 pub enum ConfigField {
     Duration(String),
@@ -83,6 +100,8 @@ pub enum Message {
     EventReceived(TestEvent),
     Tick,
     DismissError,
+    DismissModal,
+    RebootToFirmware,
     FocusNext,
     FocusPrevious,
 }
@@ -99,6 +118,7 @@ pub struct CoreProbeApp {
     pub test_running: bool,
     pub progress: TestProgress,
     pub error_banner: Option<String>,
+    pub modal_content: Option<ModalContent>,
     pub event_receiver: Option<EventReceiver>,
     pub extracted_binaries: Option<ExtractedBinaries>,
 }
@@ -151,6 +171,7 @@ pub fn boot() -> (CoreProbeApp, Task<Message>) {
         test_running: false,
         progress: TestProgress::default(),
         error_banner,
+        modal_content: None,
         event_receiver: None,
         extracted_binaries,
     };
@@ -161,6 +182,8 @@ pub fn boot() -> (CoreProbeApp, Task<Message>) {
 pub fn update(state: &mut CoreProbeApp, message: Message) -> Task<Message> {
     match message {
         Message::StartTest => {
+            state.modal_content = None;
+
             if state.test_running {
                 return Task::none();
             }
@@ -287,6 +310,25 @@ pub fn update(state: &mut CoreProbeApp, message: Message) -> Task<Message> {
         }
         Message::DismissError => {
             state.error_banner = None;
+        }
+        Message::DismissModal => {
+            state.modal_content = None;
+        }
+        Message::RebootToFirmware => {
+            match std::process::Command::new("systemctl")
+                .arg("reboot")
+                .arg("--firmware-setup")
+                .spawn()
+            {
+                Ok(child) => {
+                    info!(pid = child.id(), "requested reboot to firmware setup");
+                }
+                Err(error) => {
+                    warn!(%error, "failed to spawn firmware reboot command");
+                    state.error_banner =
+                        Some(format!("Failed to reboot to firmware setup: {error}"));
+                }
+            }
         }
         Message::FocusNext => {
             return iced::widget::operation::focus_next();
@@ -549,6 +591,88 @@ fn build_completion_notification(
     }
 }
 
+pub fn build_modal_content(
+    core_results: &BTreeMap<u32, CoreResultInfo>,
+    core_statuses: &BTreeMap<u32, CoreStatus>,
+    topology: &CpuTopology,
+    total_duration: Duration,
+    iterations_completed: u32,
+) -> Option<ModalContent> {
+    let mut unstable_cores = Vec::new();
+    let mut stable_core_indices = BTreeSet::new();
+
+    for (&physical_core_id, result) in core_results {
+        let Some(bios_index) = topology.bios_index(physical_core_id) else {
+            continue;
+        };
+
+        if result.mprime_errors.is_empty() && result.mce_errors.is_empty() {
+            if matches!(
+                core_statuses.get(&physical_core_id),
+                Some(CoreStatus::Passed)
+            ) {
+                stable_core_indices.insert(bios_index);
+            }
+            continue;
+        }
+
+        let error_summary = gui_widgets::format_error_summary(&result.mprime_errors)
+            .unwrap_or_else(|| String::from("ERROR"));
+
+        unstable_cores.push(ModalCoreResult {
+            bios_index,
+            error_summary,
+            ccd_index: derive_ccd_index(topology, physical_core_id),
+        });
+    }
+
+    if unstable_cores.is_empty() {
+        return None;
+    }
+
+    unstable_cores.sort_by_key(|core| core.bios_index);
+
+    let stable_core_indices: Vec<u32> = stable_core_indices.into_iter().collect();
+    let failed_bios_indices: Vec<u32> = unstable_cores.iter().map(|core| core.bios_index).collect();
+    let qr_content = format!(
+        "Failed BIOS cores: {}",
+        failed_bios_indices
+            .iter()
+            .map(|index| index.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    Some(ModalContent {
+        unstable_cores,
+        stable_core_indices,
+        total_duration,
+        iterations_completed,
+        qr_content,
+    })
+}
+
+fn derive_ccd_index(topology: &CpuTopology, physical_core_id: u32) -> u32 {
+    let mut ccd_index: u32 = 0;
+    let mut previous_physical_id: Option<u32> = None;
+
+    for &current_physical_id in topology.core_map.keys() {
+        if let Some(previous) = previous_physical_id {
+            if current_physical_id > previous.saturating_add(1) {
+                ccd_index = ccd_index.saturating_add(1);
+            }
+        }
+
+        if current_physical_id == physical_core_id {
+            return ccd_index;
+        }
+
+        previous_physical_id = Some(current_physical_id);
+    }
+
+    0
+}
+
 fn append_log(state: &mut CoreProbeApp, level: LogLevel, message: String) {
     state.log_entries.push(LogEntry {
         timestamp: current_time_label(),
@@ -719,6 +843,7 @@ mod tests {
             test_running: false,
             progress: TestProgress::default(),
             error_banner: None,
+            modal_content: None,
             event_receiver: None,
             extracted_binaries: None,
         }
@@ -1047,6 +1172,169 @@ mod tests {
         );
         process_event(&mut app, TestEvent::TestStarted { total_cores: 12 });
         assert!(app.core_results.is_empty());
+    }
+
+    #[test]
+    fn test_build_modal_content_with_failures() {
+        let topology = topology_with_non_contiguous_physical_ids();
+        let mut core_results = BTreeMap::new();
+        let mut core_statuses = BTreeMap::new();
+
+        for physical_core_id in [0_u32, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13] {
+            core_statuses.insert(physical_core_id, CoreStatus::Passed);
+            core_results.insert(
+                physical_core_id,
+                CoreResultInfo {
+                    mprime_errors: Vec::new(),
+                    mce_errors: Vec::new(),
+                    duration_tested: Duration::from_secs(360),
+                    iterations_completed: 3,
+                },
+            );
+        }
+
+        core_results.insert(
+            0,
+            CoreResultInfo {
+                mprime_errors: vec![crate::error_parser::MprimeError {
+                    error_type: crate::error_parser::MprimeErrorType::RoundoffError,
+                    message: String::from("ROUND OFF > 0.40"),
+                    fft_size: Some(1344),
+                    timestamp: None,
+                }],
+                mce_errors: Vec::new(),
+                duration_tested: Duration::from_secs(120),
+                iterations_completed: 1,
+            },
+        );
+        core_results.insert(
+            8,
+            CoreResultInfo {
+                mprime_errors: Vec::new(),
+                mce_errors: vec![crate::mce_monitor::MceError {
+                    cpu_id: 8,
+                    bank: None,
+                    error_type: crate::mce_monitor::MceErrorType::MachineCheck,
+                    message: String::from("MCE"),
+                    timestamp: String::from("2026-01-01T00:00:00Z"),
+                    apic_id: None,
+                }],
+                duration_tested: Duration::from_secs(120),
+                iterations_completed: 1,
+            },
+        );
+
+        let modal = build_modal_content(
+            &core_results,
+            &core_statuses,
+            &topology,
+            Duration::from_secs(720),
+            3,
+        );
+
+        let modal = modal.expect("modal content should exist");
+        assert_eq!(modal.unstable_cores.len(), 2);
+        assert_eq!(modal.stable_core_indices.len(), 10);
+        assert_eq!(modal.total_duration, Duration::from_secs(720));
+        assert_eq!(modal.iterations_completed, 3);
+        assert_eq!(modal.qr_content, "Failed BIOS cores: 0, 6");
+    }
+
+    #[test]
+    fn test_build_modal_content_no_failures() {
+        let topology = topology_with_non_contiguous_physical_ids();
+        let mut core_results = BTreeMap::new();
+        let mut core_statuses = BTreeMap::new();
+
+        for physical_core_id in [0_u32, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13] {
+            core_statuses.insert(physical_core_id, CoreStatus::Passed);
+            core_results.insert(
+                physical_core_id,
+                CoreResultInfo {
+                    mprime_errors: Vec::new(),
+                    mce_errors: Vec::new(),
+                    duration_tested: Duration::from_secs(360),
+                    iterations_completed: 3,
+                },
+            );
+        }
+
+        assert!(build_modal_content(
+            &core_results,
+            &core_statuses,
+            &topology,
+            Duration::from_secs(720),
+            3,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn test_build_modal_content_uses_bios_indices() {
+        let topology = topology_with_non_contiguous_physical_ids();
+        let mut core_results = BTreeMap::new();
+        let mut core_statuses = BTreeMap::new();
+
+        core_statuses.insert(0, CoreStatus::Passed);
+        core_results.insert(
+            0,
+            CoreResultInfo {
+                mprime_errors: vec![crate::error_parser::MprimeError {
+                    error_type: crate::error_parser::MprimeErrorType::HardwareFailure,
+                    message: String::from("Hardware failure detected"),
+                    fft_size: None,
+                    timestamp: None,
+                }],
+                mce_errors: Vec::new(),
+                duration_tested: Duration::from_secs(60),
+                iterations_completed: 1,
+            },
+        );
+
+        let modal = build_modal_content(
+            &core_results,
+            &core_statuses,
+            &topology,
+            Duration::from_secs(60),
+            1,
+        )
+        .expect("modal content should exist");
+
+        assert_eq!(modal.unstable_cores[0].bios_index, 0);
+        assert_eq!(modal.unstable_cores[0].ccd_index, 0);
+    }
+
+    #[test]
+    fn test_dismiss_modal_clears_state() {
+        let mut app = make_app();
+        app.modal_content = Some(ModalContent {
+            unstable_cores: Vec::new(),
+            stable_core_indices: Vec::new(),
+            total_duration: Duration::from_secs(1),
+            iterations_completed: 1,
+            qr_content: String::new(),
+        });
+
+        let _ = update(&mut app, Message::DismissModal);
+
+        assert!(app.modal_content.is_none());
+    }
+
+    #[test]
+    fn test_start_test_clears_modal() {
+        let mut app = make_app();
+        app.modal_content = Some(ModalContent {
+            unstable_cores: Vec::new(),
+            stable_core_indices: Vec::new(),
+            total_duration: Duration::from_secs(1),
+            iterations_completed: 1,
+            qr_content: String::new(),
+        });
+        app.test_running = true;
+
+        let _ = update(&mut app, Message::StartTest);
+
+        assert!(app.modal_content.is_none());
     }
 
     /// BDD: Given all passed results, when building notification, then stable message is returned
