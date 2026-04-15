@@ -13,6 +13,8 @@ use crate::cpu_topology::{detect_cpu_topology, CpuTopology};
 use crate::embedded::ExtractedBinaries;
 use crate::error_parser::MprimeError;
 use crate::gui_events::{create_event_channel, EventReceiver, LogLevel, TestEvent};
+use crate::gui_modal;
+use crate::gui_qr;
 use crate::gui_theme::{dark_theme, detect_system_theme, light_theme, ThemeMode};
 use crate::gui_widgets;
 use crate::mce_monitor::MceError;
@@ -81,6 +83,7 @@ pub struct ModalContent {
     pub total_duration: Duration,
     pub iterations_completed: u32,
     pub qr_content: String,
+    pub interrupted: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -418,7 +421,11 @@ pub fn view(state: &CoreProbeApp) -> Element<'_, Message> {
         main_col = column![error_banner, main_col].spacing(8);
     }
 
-    main_col.into()
+    if let Some(content) = &state.modal_content {
+        gui_modal::modal_overlay_view(main_col.into(), content, is_dark)
+    } else {
+        main_col.into()
+    }
 }
 
 pub fn subscription(_state: &CoreProbeApp) -> Subscription<Message> {
@@ -436,6 +443,10 @@ pub fn subscription(_state: &CoreProbeApp) -> Subscription<Message> {
                     Some(Message::FocusNext)
                 }
             }
+            iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(key::Named::Escape),
+                ..
+            }) => Some(Message::DismissModal),
             _ => None,
         }),
     ])
@@ -546,6 +557,17 @@ fn process_event(state: &mut CoreProbeApp, event: TestEvent) {
             state.progress.cores_completed = results.results.len();
             let (summary, body, urgency) = build_completion_notification(&results.results);
             send_desktop_notification(&summary, &body, urgency);
+
+            state.modal_content = state.topology.as_ref().and_then(|topology| {
+                build_modal_content(
+                    &state.core_results,
+                    &state.core_statuses,
+                    topology,
+                    Duration::from_secs(0),
+                    state.config.iterations,
+                    results.interrupted,
+                )
+            });
         }
         TestEvent::LogMessage { level, message } => {
             append_log(state, level, message);
@@ -597,6 +619,7 @@ pub fn build_modal_content(
     topology: &CpuTopology,
     total_duration: Duration,
     iterations_completed: u32,
+    interrupted: bool,
 ) -> Option<ModalContent> {
     let mut unstable_cores = Vec::new();
     let mut stable_core_indices = BTreeSet::new();
@@ -634,14 +657,7 @@ pub fn build_modal_content(
 
     let stable_core_indices: Vec<u32> = stable_core_indices.into_iter().collect();
     let failed_bios_indices: Vec<u32> = unstable_cores.iter().map(|core| core.bios_index).collect();
-    let qr_content = format!(
-        "Failed BIOS cores: {}",
-        failed_bios_indices
-            .iter()
-            .map(|index| index.to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
+    let qr_content = gui_qr::build_qr_content(&failed_bios_indices);
 
     Some(ModalContent {
         unstable_cores,
@@ -649,6 +665,7 @@ pub fn build_modal_content(
         total_duration,
         iterations_completed,
         qr_content,
+        interrupted,
     })
 }
 
@@ -1104,6 +1121,91 @@ mod tests {
         assert!(!app.core_progress.contains_key(&3));
     }
 
+    #[test]
+    fn given_completed_test_with_topology_when_processed_then_modal_content_is_populated() {
+        use crate::error_parser::{MprimeError, MprimeErrorType};
+
+        let topology = topology_with_non_contiguous_physical_ids();
+        let mut app = make_app();
+        app.topology = Some(topology);
+        app.config.iterations = 5;
+        app.test_running = true;
+
+        app.core_statuses.insert(0, CoreStatus::Failed);
+        app.core_results.insert(
+            0,
+            CoreResultInfo {
+                mprime_errors: vec![MprimeError {
+                    error_type: MprimeErrorType::HardwareFailure,
+                    message: String::from("Hardware failure detected"),
+                    fft_size: None,
+                    timestamp: None,
+                }],
+                mce_errors: Vec::new(),
+                duration_tested: Duration::from_secs(120),
+                iterations_completed: 1,
+            },
+        );
+
+        process_event(
+            &mut app,
+            TestEvent::TestCompleted {
+                results: crate::coordinator::CycleResults {
+                    results: vec![CoreTestResult {
+                        physical_core_id: 0,
+                        bios_index: 0,
+                        logical_cpu_ids: vec![0, 1],
+                        status: CoreStatus::Failed,
+                        mprime_errors: Vec::new(),
+                        mce_errors: Vec::new(),
+                        duration_tested: Duration::from_secs(120),
+                        iterations_completed: 1,
+                    }],
+                    total_duration: Duration::from_secs(120),
+                    iterations_completed: 1,
+                    interrupted: false,
+                },
+            },
+        );
+
+        let modal = app
+            .modal_content
+            .as_ref()
+            .expect("expected modal content after completed test");
+        assert_eq!(modal.iterations_completed, 5);
+        assert_eq!(modal.total_duration, Duration::from_secs(0));
+        assert_eq!(modal.qr_content, "Failed BIOS cores: 0");
+    }
+
+    #[test]
+    fn given_completed_test_without_topology_when_processed_then_modal_content_remains_none() {
+        let mut app = make_app();
+        app.test_running = true;
+
+        process_event(
+            &mut app,
+            TestEvent::TestCompleted {
+                results: crate::coordinator::CycleResults {
+                    results: vec![CoreTestResult {
+                        physical_core_id: 0,
+                        bios_index: 0,
+                        logical_cpu_ids: vec![0, 1],
+                        status: CoreStatus::Failed,
+                        mprime_errors: Vec::new(),
+                        mce_errors: Vec::new(),
+                        duration_tested: Duration::from_secs(120),
+                        iterations_completed: 1,
+                    }],
+                    total_duration: Duration::from_secs(120),
+                    iterations_completed: 1,
+                    interrupted: false,
+                },
+            },
+        );
+
+        assert!(app.modal_content.is_none());
+    }
+
     /// BDD: Given pre-existing progress, when TestStarted, then per-core progress cleared
     #[test]
     fn given_test_started_when_processed_then_per_core_progress_cleared() {
@@ -1230,6 +1332,7 @@ mod tests {
             &topology,
             Duration::from_secs(720),
             3,
+            false,
         );
 
         let modal = modal.expect("modal content should exist");
@@ -1265,6 +1368,7 @@ mod tests {
             &topology,
             Duration::from_secs(720),
             3,
+            false,
         )
         .is_none());
     }
@@ -1297,6 +1401,7 @@ mod tests {
             &topology,
             Duration::from_secs(60),
             1,
+            false,
         )
         .expect("modal content should exist");
 
@@ -1313,6 +1418,7 @@ mod tests {
             total_duration: Duration::from_secs(1),
             iterations_completed: 1,
             qr_content: String::new(),
+            interrupted: false,
         });
 
         let _ = update(&mut app, Message::DismissModal);
@@ -1329,6 +1435,7 @@ mod tests {
             total_duration: Duration::from_secs(1),
             iterations_completed: 1,
             qr_content: String::new(),
+            interrupted: false,
         });
         app.test_running = true;
 

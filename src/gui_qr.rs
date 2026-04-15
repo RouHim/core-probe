@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
 use fast_qr::qr::QRBuilder;
+use iced::widget::{column, container, row, text, Space};
+use iced::{Color, Element, Length};
 
 pub struct QrMatrix {
     pub modules: Vec<Vec<bool>>,
@@ -38,6 +40,62 @@ pub fn generate_qr_matrix(content: &str) -> Result<QrMatrix> {
         .collect::<Vec<Vec<bool>>>();
 
     Ok(QrMatrix { modules, size })
+}
+
+pub fn qr_code_view<'a>(
+    qr_content: &str,
+    is_dark: bool,
+    module_size: f32,
+) -> Element<'a, crate::gui::Message> {
+    let matrix = match generate_qr_matrix(qr_content) {
+        Ok(m) => m,
+        Err(_) => return text("QR code unavailable").into(),
+    };
+
+    let (dark_module_color, light_module_color) = if is_dark {
+        (Color::WHITE, Color::from_rgb(0.1, 0.1, 0.1))
+    } else {
+        (Color::BLACK, Color::WHITE)
+    };
+
+    let quiet_zone_color = light_module_color;
+
+    let rows: Vec<Element<'a, crate::gui::Message>> = matrix
+        .modules
+        .iter()
+        .map(|module_row| {
+            let cells: Vec<Element<'a, crate::gui::Message>> = module_row
+                .iter()
+                .map(|&is_dark_module| {
+                    let color = if is_dark_module {
+                        dark_module_color
+                    } else {
+                        light_module_color
+                    };
+                    container(Space::new())
+                        .width(Length::Fixed(module_size))
+                        .height(Length::Fixed(module_size))
+                        .style(move |_theme: &iced::Theme| container::Style {
+                            background: Some(color.into()),
+                            ..container::Style::default()
+                        })
+                        .into()
+                })
+                .collect();
+            row(cells).spacing(0).into()
+        })
+        .collect();
+
+    let grid = column(rows).spacing(0);
+
+    let padding = module_size as u16;
+    container(grid)
+        .padding(padding)
+        .style(move |_theme: &iced::Theme| container::Style {
+            background: Some(quiet_zone_color.into()),
+            ..container::Style::default()
+        })
+        .into()
 }
 
 #[cfg(test)]

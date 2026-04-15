@@ -93,10 +93,11 @@ fn build_result_card<'a>(content: &ModalContent, is_dark: bool) -> Element<'a, M
 
     let has_unstable = !content.unstable_cores.is_empty();
 
-    let title_str = if has_unstable {
-        "TEST COMPLETE \u{2014} UNSTABLE CORES FOUND"
-    } else {
-        "TEST COMPLETE"
+    let title_str = match (content.interrupted, has_unstable) {
+        (true, true) => "TEST INTERRUPTED \u{2014} UNSTABLE CORES FOUND",
+        (true, false) => "TEST INTERRUPTED",
+        (false, true) => "TEST COMPLETE \u{2014} UNSTABLE CORES FOUND",
+        (false, false) => "TEST COMPLETE",
     };
     let title = text(title_str).size(20).color(text_primary);
 
@@ -147,30 +148,10 @@ fn build_result_card<'a>(content: &ModalContent, is_dark: bool) -> Element<'a, M
     .into();
     body = body.push(duration_line);
 
-    let qr_placeholder: Element<'a, Message> =
-        container(text("[ QR Code ]").size(14).color(text_secondary))
-            .width(Length::Fixed(180.0))
-            .height(Length::Fixed(180.0))
-            .center_x(Length::Fill)
-            .center_y(Length::Fill)
-            .style(move |_theme: &iced::Theme| container::Style {
-                background: Some(
-                    if is_dark {
-                        gui_theme::DARK_BG_TERTIARY
-                    } else {
-                        gui_theme::LIGHT_BG_TERTIARY
-                    }
-                    .into(),
-                ),
-                border: iced::Border {
-                    radius: 4.0.into(),
-                    width: 1.0,
-                    color: card_border,
-                },
-                ..container::Style::default()
-            })
-            .into();
-    body = body.push(qr_placeholder);
+    let qr_widget: Element<'a, Message> =
+        crate::gui_qr::qr_code_view(&content.qr_content, is_dark, 6.0);
+    let qr_centered: Element<'a, Message> = container(qr_widget).center_x(Length::Fill).into();
+    body = body.push(qr_centered);
 
     let instruction: Element<'a, Message> =
         text("Scan QR code with phone before rebooting to BIOS")
