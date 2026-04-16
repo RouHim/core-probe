@@ -305,6 +305,7 @@ pub struct CoreTileData<'a> {
     pub error_summary: Option<String>,
     pub is_dark: bool,
     pub greyed_out: bool,
+    pub amd_generation: crate::co_tier::AmdGeneration,
 }
 
 fn format_time_mm_ss(secs: u64) -> String {
@@ -448,6 +449,8 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
     let bios_index = data.bios_index;
     let physical_core_id = data.physical_core_id;
     let co_offset = data.co_offset;
+    let is_dark = data.is_dark;
+    let amd_generation = data.amd_generation;
     let status = data.status.clone();
     AnimationBuilder::new(
         ((bg, fg, border_color, secondary_color), ratio),
@@ -458,11 +461,9 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
             ]
             .align_y(iced::Alignment::Center);
             if let Some(offset) = co_offset {
-                top_row = top_row.push(
-                    text(format!("CO: {offset}"))
-                        .size(13)
-                        .color(secondary_color),
-                );
+                let tier = crate::co_tier::classify_co(offset, amd_generation);
+                let co_color = crate::gui_theme::co_tier_color(&tier, is_dark);
+                top_row = top_row.push(text(format!("CO: {offset}")).size(13).color(co_color));
             }
 
             let phys_label = text(format!("Core ID {}", physical_core_id))
@@ -589,6 +590,7 @@ pub fn topology_grid_view<'a>(
     };
 
     let ccd_groups = group_cores_by_ccd(&topology.core_map);
+    let amd_generation = crate::co_tier::detect_generation(&topology.model_name);
     let mut main_col = column![].spacing(12);
 
     for (ccd_label, core_ids) in ccd_groups {
@@ -631,6 +633,7 @@ pub fn topology_grid_view<'a>(
                 error_summary,
                 is_dark,
                 greyed_out,
+                amd_generation,
             };
 
             grid = grid.push(core_tile_view(&tile_data));
