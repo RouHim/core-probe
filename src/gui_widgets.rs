@@ -312,6 +312,26 @@ fn format_time_mm_ss(secs: u64) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
 }
 
+fn co_badge<'a>(
+    label: String,
+    bg: iced::Color,
+    border: iced::Color,
+    fg: iced::Color,
+) -> Element<'a, Message> {
+    container(text(label).size(12).color(fg))
+        .padding(Padding::from([2, 8]))
+        .style(move |_theme: &iced::Theme| container::Style {
+            background: Some(bg.into()),
+            border: iced::Border {
+                radius: 4.0.into(),
+                width: 1.0,
+                color: border,
+            },
+            ..Default::default()
+        })
+        .into()
+}
+
 pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
     if data.greyed_out {
         let bg = gui_theme::greyed_bg_color(data.is_dark);
@@ -333,11 +353,21 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
         ]
         .align_y(iced::Alignment::Center);
         if let Some(offset) = data.co_offset {
-            top_row = top_row.push(
-                text(format!("CO: {offset}"))
-                    .size(13)
-                    .color(secondary_color),
+            let badge = co_badge(
+                format!("CO: {offset}"),
+                if data.is_dark {
+                    gui_theme::DARK_BG_TERTIARY
+                } else {
+                    gui_theme::LIGHT_BG_TERTIARY
+                },
+                if data.is_dark {
+                    gui_theme::DARK_CARD_BORDER
+                } else {
+                    gui_theme::LIGHT_CARD_BORDER
+                },
+                secondary_color,
             );
+            top_row = top_row.push(badge);
         }
 
         let phys_label = text(format!("Core ID {}", data.physical_core_id))
@@ -462,8 +492,13 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
             .align_y(iced::Alignment::Center);
             if let Some(offset) = co_offset {
                 let tier = crate::co_tier::classify_co(offset, amd_generation);
-                let co_color = crate::gui_theme::co_tier_color(&tier, is_dark);
-                top_row = top_row.push(text(format!("CO: {offset}")).size(13).color(co_color));
+                let badge = co_badge(
+                    format!("CO: {offset}"),
+                    crate::gui_theme::co_tier_badge_background(&tier, is_dark),
+                    crate::gui_theme::co_tier_badge_border(&tier, is_dark),
+                    crate::gui_theme::co_tier_color(&tier, is_dark),
+                );
+                top_row = top_row.push(badge);
             }
 
             let phys_label = text(format!("Core ID {}", physical_core_id))

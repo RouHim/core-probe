@@ -106,6 +106,36 @@ pub const DARK_CO_BRONZE: Color = Color::from_rgb(
     0x8c as f32 / 255.0,
     0x40 as f32 / 255.0,
 );
+pub const DARK_CO_GOLD_BG: Color = Color::from_rgb(
+    0x4d as f32 / 255.0,
+    0x3a as f32 / 255.0,
+    0x12 as f32 / 255.0,
+);
+pub const DARK_CO_GOLD_BORDER: Color = Color::from_rgb(
+    0xc8 as f32 / 255.0,
+    0x98 as f32 / 255.0,
+    0x24 as f32 / 255.0,
+);
+pub const DARK_CO_SILVER_BG: Color = Color::from_rgb(
+    0x34 as f32 / 255.0,
+    0x37 as f32 / 255.0,
+    0x40 as f32 / 255.0,
+);
+pub const DARK_CO_SILVER_BORDER: Color = Color::from_rgb(
+    0x92 as f32 / 255.0,
+    0x98 as f32 / 255.0,
+    0xa4 as f32 / 255.0,
+);
+pub const DARK_CO_BRONZE_BG: Color = Color::from_rgb(
+    0x4a as f32 / 255.0,
+    0x2b as f32 / 255.0,
+    0x17 as f32 / 255.0,
+);
+pub const DARK_CO_BRONZE_BORDER: Color = Color::from_rgb(
+    0xb2 as f32 / 255.0,
+    0x6a as f32 / 255.0,
+    0x30 as f32 / 255.0,
+);
 pub const LIGHT_CO_GOLD: Color = Color::from_rgb(
     0xb8 as f32 / 255.0,
     0x86 as f32 / 255.0,
@@ -120,6 +150,36 @@ pub const LIGHT_CO_BRONZE: Color = Color::from_rgb(
     0x8b as f32 / 255.0,
     0x45 as f32 / 255.0,
     0x13 as f32 / 255.0,
+);
+pub const LIGHT_CO_GOLD_BG: Color = Color::from_rgb(
+    0xf3 as f32 / 255.0,
+    0xe7 as f32 / 255.0,
+    0xbd as f32 / 255.0,
+);
+pub const LIGHT_CO_GOLD_BORDER: Color = Color::from_rgb(
+    0xd2 as f32 / 255.0,
+    0xb4 as f32 / 255.0,
+    0x49 as f32 / 255.0,
+);
+pub const LIGHT_CO_SILVER_BG: Color = Color::from_rgb(
+    0xe5 as f32 / 255.0,
+    0xe7 as f32 / 255.0,
+    0xec as f32 / 255.0,
+);
+pub const LIGHT_CO_SILVER_BORDER: Color = Color::from_rgb(
+    0xb7 as f32 / 255.0,
+    0xbd as f32 / 255.0,
+    0xc8 as f32 / 255.0,
+);
+pub const LIGHT_CO_BRONZE_BG: Color = Color::from_rgb(
+    0xef as f32 / 255.0,
+    0xd9 as f32 / 255.0,
+    0xc9 as f32 / 255.0,
+);
+pub const LIGHT_CO_BRONZE_BORDER: Color = Color::from_rgb(
+    0xc3 as f32 / 255.0,
+    0x91 as f32 / 255.0,
+    0x6a as f32 / 255.0,
 );
 
 pub const DARK_BUTTON_BG: Color = Color::from_rgb(
@@ -264,6 +324,36 @@ pub fn co_tier_color(tier: &crate::co_tier::CoTier, is_dark: bool) -> Color {
         (CoTier::Bronze, false) => LIGHT_CO_BRONZE,
         (CoTier::Neutral, true) => DARK_TEXT_SECONDARY,
         (CoTier::Neutral, false) => LIGHT_TEXT_SECONDARY,
+    }
+}
+
+pub fn co_tier_badge_background(tier: &crate::co_tier::CoTier, is_dark: bool) -> Color {
+    use crate::co_tier::CoTier;
+
+    match (tier, is_dark) {
+        (CoTier::Gold, true) => DARK_CO_GOLD_BG,
+        (CoTier::Gold, false) => LIGHT_CO_GOLD_BG,
+        (CoTier::Silver, true) => DARK_CO_SILVER_BG,
+        (CoTier::Silver, false) => LIGHT_CO_SILVER_BG,
+        (CoTier::Bronze, true) => DARK_CO_BRONZE_BG,
+        (CoTier::Bronze, false) => LIGHT_CO_BRONZE_BG,
+        (CoTier::Neutral, true) => DARK_BG_TERTIARY,
+        (CoTier::Neutral, false) => LIGHT_BG_TERTIARY,
+    }
+}
+
+pub fn co_tier_badge_border(tier: &crate::co_tier::CoTier, is_dark: bool) -> Color {
+    use crate::co_tier::CoTier;
+
+    match (tier, is_dark) {
+        (CoTier::Gold, true) => DARK_CO_GOLD_BORDER,
+        (CoTier::Gold, false) => LIGHT_CO_GOLD_BORDER,
+        (CoTier::Silver, true) => DARK_CO_SILVER_BORDER,
+        (CoTier::Silver, false) => LIGHT_CO_SILVER_BORDER,
+        (CoTier::Bronze, true) => DARK_CO_BRONZE_BORDER,
+        (CoTier::Bronze, false) => LIGHT_CO_BRONZE_BORDER,
+        (CoTier::Neutral, true) => DARK_CARD_BORDER,
+        (CoTier::Neutral, false) => LIGHT_CARD_BORDER,
     }
 }
 
@@ -845,5 +935,57 @@ mod tests {
     #[test]
     fn co_tier_color_neutral_light_matches_secondary() {
         assert_eq!(co_tier_color(&CoTier::Neutral, false), LIGHT_TEXT_SECONDARY);
+    }
+
+    #[test]
+    fn co_tier_badge_background_gold_dark_is_distinct() {
+        let gold = co_tier_badge_background(&CoTier::Gold, true);
+        let silver = co_tier_badge_background(&CoTier::Silver, true);
+        let bronze = co_tier_badge_background(&CoTier::Bronze, true);
+        assert_ne!(gold, silver);
+        assert_ne!(gold, bronze);
+        assert_ne!(silver, bronze);
+    }
+
+    #[test]
+    fn co_tier_badge_background_neutral_dark_matches_tertiary() {
+        assert_eq!(
+            co_tier_badge_background(&CoTier::Neutral, true),
+            DARK_BG_TERTIARY
+        );
+    }
+
+    #[test]
+    fn co_tier_badge_background_neutral_light_matches_tertiary() {
+        assert_eq!(
+            co_tier_badge_background(&CoTier::Neutral, false),
+            LIGHT_BG_TERTIARY
+        );
+    }
+
+    #[test]
+    fn co_tier_badge_border_gold_dark_is_distinct() {
+        let gold = co_tier_badge_border(&CoTier::Gold, true);
+        let silver = co_tier_badge_border(&CoTier::Silver, true);
+        let bronze = co_tier_badge_border(&CoTier::Bronze, true);
+        assert_ne!(gold, silver);
+        assert_ne!(gold, bronze);
+        assert_ne!(silver, bronze);
+    }
+
+    #[test]
+    fn co_tier_badge_border_neutral_dark_matches_card_border() {
+        assert_eq!(
+            co_tier_badge_border(&CoTier::Neutral, true),
+            DARK_CARD_BORDER
+        );
+    }
+
+    #[test]
+    fn co_tier_badge_border_neutral_light_matches_card_border() {
+        assert_eq!(
+            co_tier_badge_border(&CoTier::Neutral, false),
+            LIGHT_CARD_BORDER
+        );
     }
 }
