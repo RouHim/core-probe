@@ -87,6 +87,41 @@ pub const DARK_BADGE_PBO_TEXT: Color = Color::from_rgb(
     0xff as f32 / 255.0,
 );
 
+// ---------------------------------------------------------------------------
+// CO tier text colors
+// ---------------------------------------------------------------------------
+
+pub const DARK_CO_GOLD: Color = Color::from_rgb(
+    0xff as f32 / 255.0,
+    0xc0 as f32 / 255.0,
+    0x30 as f32 / 255.0,
+);
+pub const DARK_CO_SILVER: Color = Color::from_rgb(
+    0xc8 as f32 / 255.0,
+    0xc8 as f32 / 255.0,
+    0xd0 as f32 / 255.0,
+);
+pub const DARK_CO_BRONZE: Color = Color::from_rgb(
+    0xe0 as f32 / 255.0,
+    0x8c as f32 / 255.0,
+    0x40 as f32 / 255.0,
+);
+pub const LIGHT_CO_GOLD: Color = Color::from_rgb(
+    0xb8 as f32 / 255.0,
+    0x86 as f32 / 255.0,
+    0x0b as f32 / 255.0,
+);
+pub const LIGHT_CO_SILVER: Color = Color::from_rgb(
+    0x60 as f32 / 255.0,
+    0x60 as f32 / 255.0,
+    0x68 as f32 / 255.0,
+);
+pub const LIGHT_CO_BRONZE: Color = Color::from_rgb(
+    0x8b as f32 / 255.0,
+    0x45 as f32 / 255.0,
+    0x13 as f32 / 255.0,
+);
+
 pub const DARK_BUTTON_BG: Color = Color::from_rgb(
     0x33 as f32 / 255.0,
     0x33 as f32 / 255.0,
@@ -216,6 +251,21 @@ pub const LIGHT_BUTTON_BG: Color = Color::from_rgb(
     0xe0 as f32 / 255.0,
 );
 pub const LIGHT_BUTTON_TEXT: Color = Color::BLACK;
+
+pub fn co_tier_color(tier: &crate::co_tier::CoTier, is_dark: bool) -> Color {
+    use crate::co_tier::CoTier;
+
+    match (tier, is_dark) {
+        (CoTier::Gold, true) => DARK_CO_GOLD,
+        (CoTier::Gold, false) => LIGHT_CO_GOLD,
+        (CoTier::Silver, true) => DARK_CO_SILVER,
+        (CoTier::Silver, false) => LIGHT_CO_SILVER,
+        (CoTier::Bronze, true) => DARK_CO_BRONZE,
+        (CoTier::Bronze, false) => LIGHT_CO_BRONZE,
+        (CoTier::Neutral, true) => DARK_TEXT_SECONDARY,
+        (CoTier::Neutral, false) => LIGHT_TEXT_SECONDARY,
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Dark core status colors
@@ -553,6 +603,7 @@ pub fn log_level_color(level: &LogLevel, is_dark: bool) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::co_tier::CoTier;
 
     #[test]
     fn given_dark_theme_when_created_then_uses_wireframe_background() {
@@ -774,5 +825,25 @@ mod tests {
             LIGHT_BG_TERTIARY, LIGHT_HEADER_BG,
             "BG_TERTIARY and HEADER_BG must differ"
         );
+    }
+
+    #[test]
+    fn co_tier_color_gold_dark_is_distinct() {
+        let gold = co_tier_color(&CoTier::Gold, true);
+        let silver = co_tier_color(&CoTier::Silver, true);
+        let bronze = co_tier_color(&CoTier::Bronze, true);
+        assert_ne!(gold, silver);
+        assert_ne!(gold, bronze);
+        assert_ne!(silver, bronze);
+    }
+
+    #[test]
+    fn co_tier_color_neutral_dark_matches_secondary() {
+        assert_eq!(co_tier_color(&CoTier::Neutral, true), DARK_TEXT_SECONDARY);
+    }
+
+    #[test]
+    fn co_tier_color_neutral_light_matches_secondary() {
+        assert_eq!(co_tier_color(&CoTier::Neutral, false), LIGHT_TEXT_SECONDARY);
     }
 }
