@@ -3,6 +3,7 @@ pub mod co_decoder;
 pub mod co_heuristic;
 pub mod co_offsets;
 pub mod co_reader;
+pub mod co_tier;
 pub mod coordinator;
 pub mod cpu_topology;
 pub mod embedded;
