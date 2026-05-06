@@ -690,6 +690,83 @@ pub fn log_level_color(level: &LogLevel, is_dark: bool) -> Color {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Sparkline dimension constants
+// ---------------------------------------------------------------------------
+
+/// Width of a single sparkline bar in logical pixels.
+pub const SPARKLINE_BAR_WIDTH: f32 = 6.0;
+
+/// Gap between sparkline bars in logical pixels.
+pub const SPARKLINE_BAR_GAP: f32 = 2.0;
+
+/// Maximum bar height (100 % load) in logical pixels.
+pub const SPARKLINE_BAR_MAX_HEIGHT: f32 = 24.0;
+
+/// Minimum bar height (0 % load) in logical pixels.
+pub const SPARKLINE_BAR_MIN_HEIGHT: f32 = 4.0;
+
+/// Total height of the sparkline region in logical pixels.
+pub const SPARKLINE_REGION_HEIGHT: f32 = 30.0;
+
+// ---------------------------------------------------------------------------
+// Sparkline colour / opacity helpers
+// ---------------------------------------------------------------------------
+
+/// Convert HSL colour components (each in range [0, 1]) to sRGB.
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (f32, f32, f32) {
+    if s == 0.0 {
+        return (l, l, l);
+    }
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let x = c * (1.0 - ((h * 6.0) % 2.0 - 1.0).abs());
+    let m = l - c / 2.0;
+    let (r, g, b) = match (h * 6.0).floor() as i32 % 6 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        5 => (c, 0.0, x),
+        _ => (0.0, 0.0, 0.0),
+    };
+    (r + m, g + m, b + m)
+}
+
+/// Returns a thermal-gradient colour for a given CPU load percentage.
+///
+/// - 0–30 %:  green  (hue ≈ 0.33)
+/// - 30–70 %: amber → orange (hue 0.17 → 0.08)
+/// - 70–100 %: orange → red (hue 0.08 → 0.0)
+///
+/// Dark theme colours are brighter (lightness +0.1), light theme colours
+/// are deeper (lightness −0.1).
+pub fn sparkline_color(load_pct: f32, is_dark: bool) -> Color {
+    let load = load_pct.clamp(0.0, 100.0) / 100.0;
+    let saturation = 0.8;
+    let lightness = if is_dark { 0.6 } else { 0.4 };
+
+    let hue = if load <= 0.3 {
+        0.33
+    } else if load <= 0.7 {
+        // 30–70 % → amber (0.17) to orange (0.08)
+        let t = (load - 0.3) / 0.4;
+        0.17 - t * (0.17 - 0.08)
+    } else {
+        // 70–100 % → orange (0.08) to red (0.0)
+        let t = (load - 0.7) / 0.3;
+        0.08 - t * 0.08
+    };
+
+    let (r, g, b) = hsl_to_rgb(hue, saturation, lightness);
+    Color::from_rgb(r, g, b)
+}
+
+/// Linear opacity from 0.3 (idle) to 1.0 (full load).
+pub fn sparkline_opacity(load_pct: f32) -> f32 {
+    0.3 + load_pct.clamp(0.0, 100.0) / 100.0 * 0.7
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -987,5 +1064,71 @@ mod tests {
             co_tier_badge_border(&CoTier::Neutral, false),
             LIGHT_CARD_BORDER
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Sparkline colour / opacity tests
+    // -----------------------------------------------------------------------
+
+    /// BDD: Given zero load, when querying sparkline colour, then green
+    ///      channel dominates over red and blue.
+    #[test]
+    fn given_zero_load_when_querying_sparkline_color_then_green_dominant() {
+        let c = sparkline_color(0.0, true);
+        assert!(c.g > c.r, "green ({}) should exceed red ({}) at 0% load", c.g, c.r);
+        assert!(c.g > c.b, "green ({}) should exceed blue ({}) at 0% load", c.g, c.b);
+    }
+
+    /// BDD: Given full load, when querying sparkline colour, then red
+    ///      channel dominates over green and blue.
+    #[test]
+    fn given_full_load_when_querying_sparkline_color_then_red_dominant() {
+        let c = sparkline_color(100.0, true);
+        assert!(c.r > c.g, "red ({}) should exceed green ({}) at 100% load", c.r, c.g);
+        assert!(c.r > c.b, "red ({}) should exceed blue ({}) at 100% load", c.r, c.b);
+    }
+
+    /// BDD: Given the same sparkline load, when comparing dark and light theme
+    ///      colours, then the dark theme variant is brighter (higher luma).
+    #[test]
+    fn given_same_sparkline_load_when_comparing_dark_and_light_then_dark_is_brighter() {
+        let dark = sparkline_color(50.0, true);
+        let light = sparkline_color(50.0, false);
+        let dark_luma = dark.r + dark.g + dark.b;
+        let light_luma = light.r + light.g + light.b;
+        assert!(
+            dark_luma > light_luma,
+            "dark luma ({dark_luma}) should exceed light luma ({light_luma})"
+        );
+    }
+
+    /// BDD: Given 50 % load (amber zone), when computing the sparkline colour,
+    ///      then both red and green channels are present.
+    #[test]
+    fn given_fifty_percent_load_when_querying_sparkline_color_then_has_both_red_and_green() {
+        let c = sparkline_color(50.0, true);
+        assert!(c.r > 0.0, "red should be present at 50% load");
+        assert!(c.g > 0.0, "green should be present at 50% load");
+    }
+
+    /// BDD: Given zero load, when computing opacity, then returns 0.3 (minimum).
+    #[test]
+    fn given_zero_load_when_querying_sparkline_opacity_then_returns_minimum() {
+        let op = sparkline_opacity(0.0);
+        assert!((op - 0.3).abs() < 1e-6, "expected ~0.3, got {op}");
+    }
+
+    /// BDD: Given full load, when computing opacity, then returns 1.0 (maximum).
+    #[test]
+    fn given_full_load_when_querying_sparkline_opacity_then_returns_maximum() {
+        let op = sparkline_opacity(100.0);
+        assert!((op - 1.0).abs() < 1e-6, "expected ~1.0, got {op}");
+    }
+
+    /// BDD: Given 50 % load, when computing opacity, then returns 0.65 (midpoint).
+    #[test]
+    fn given_mid_load_when_querying_sparkline_opacity_then_returns_midpoint() {
+        let op = sparkline_opacity(50.0);
+        assert!((op - 0.65).abs() < 1e-6, "expected ~0.65, got {op}");
     }
 }

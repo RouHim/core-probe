@@ -1,7 +1,13 @@
+use std::collections::BTreeMap;
 use std::sync::mpsc;
 use std::thread;
 
 use crate::coordinator::{CoreTestResult, CycleResults};
+
+#[derive(Debug, Clone)]
+pub struct CpuLoadSnapshot {
+    pub loads: BTreeMap<u32, f32>,
+}
 
 #[derive(Debug, Clone)]
 pub enum LogLevel {
@@ -44,6 +50,7 @@ pub enum TestEvent {
     TestError {
         message: String,
     },
+    CpuLoadSnapshot(CpuLoadSnapshot),
 }
 
 pub type EventSender = mpsc::Sender<TestEvent>;
@@ -95,6 +102,9 @@ pub fn create_cli_event_printer(receiver: EventReceiver) -> thread::JoinHandle<(
                 }
                 TestEvent::TestError { message } => {
                     eprintln!("[error] {message}");
+                }
+                TestEvent::CpuLoadSnapshot(_) => {
+                    // CLI mode ignores CPU load snapshots
                 }
             }
         }

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::mpsc::TryRecvError;
 use std::time::Duration;
 
@@ -115,6 +115,7 @@ pub struct CoreProbeApp {
     pub core_statuses: BTreeMap<u32, CoreStatus>,
     pub core_progress: BTreeMap<u32, PerCoreProgress>,
     pub core_results: BTreeMap<u32, CoreResultInfo>,
+    pub core_load_history: BTreeMap<u32, VecDeque<f32>>,
     pub log_entries: Vec<LogEntry>,
     pub theme_mode: ThemeMode,
     pub config: TestConfig,
@@ -168,6 +169,7 @@ pub fn boot() -> (CoreProbeApp, Task<Message>) {
         core_statuses,
         core_progress: BTreeMap::new(),
         core_results: BTreeMap::new(),
+        core_load_history: BTreeMap::new(),
         log_entries: Vec::new(),
         theme_mode: ThemeMode::Dark,
         config: TestConfig::default(),
@@ -600,6 +602,56 @@ fn process_event(state: &mut CoreProbeApp, event: TestEvent) {
             append_log(state, LogLevel::Error, message.clone());
             send_desktop_notification("core-probe: Test Error", &message, "critical");
         }
+        TestEvent::CpuLoadSnapshot(_) => {
+            // GUI will handle snapshots in Task 5
+        }
+    }
+}
+
+/// Aggregates per-logical-CPU usage into per-physical-core usage by taking
+/// the maximum usage among all logical CPUs belonging to each physical core.
+///
+/// `logical_usages` is a slice of `(logical_cpu_index, usage_percent)` pairs.
+/// `core_map` maps physical core IDs to their list of logical CPU indices.
+pub fn aggregate_core_load(
+    logical_usages: &[(u32, f32)],
+    core_map: &BTreeMap<u32, Vec<u32>>,
+) -> BTreeMap<u32, f32> {
+    let mut phys_load: BTreeMap<u32, f32> = BTreeMap::new();
+
+    for &(logical_id, usage) in logical_usages {
+        let phys_id = core_map
+            .iter()
+            .find(|(_, logicals)| logicals.contains(&logical_id))
+            .map(|(&phys, _)| phys);
+
+        if let Some(phys_id) = phys_id {
+            let entry = phys_load.entry(phys_id).or_insert(0.0f32);
+            if usage > *entry {
+                *entry = usage;
+            }
+        }
+    }
+
+    phys_load
+}
+
+/// Pushes a snapshot of per-physical-core load values into a history map.
+/// Each physical core's history is a VecDeque capped at 10 samples.
+/// New samples are pushed to the back; old samples are popped from the front
+/// when the length exceeds the cap.
+pub fn push_load_sample(
+    history: &mut BTreeMap<u32, VecDeque<f32>>,
+    snapshot: &BTreeMap<u32, f32>,
+) {
+    const MAX_SAMPLES: usize = 10;
+
+    for (&phys_id, &load) in snapshot {
+        let deque = history.entry(phys_id).or_default();
+        deque.push_back(load);
+        if deque.len() > MAX_SAMPLES {
+            deque.pop_front();
+        }
     }
 }
 
@@ -895,6 +947,7 @@ mod tests {
             core_statuses: BTreeMap::new(),
             core_progress: BTreeMap::new(),
             core_results: BTreeMap::new(),
+            core_load_history: BTreeMap::new(),
             log_entries: Vec::new(),
             theme_mode: ThemeMode::Dark,
             config: TestConfig::default(),
@@ -1675,5 +1728,70 @@ mod tests {
             body.contains("6"),
             "Expected failed bios_index '6' in body: {body}"
         );
+    }
+
+    // ── smt_core_load tests ──────────────────────────────────────────────
+
+    /// BDD: Given SMT core with two logical CPUs at different loads, when aggregating,
+    ///      then per-physical-core load is the max of its logical CPUs.
+    #[test]
+    fn smt_core_load_max() {
+        let mut core_map = BTreeMap::new();
+        core_map.insert(0, vec![0, 12]);
+        let usages = [(0, 80.0f32), (12, 20.0f32)];
+
+        let result = aggregate_core_load(&usages, &core_map);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(*result.get(&0).unwrap(), 80.0);
+    }
+
+    /// BDD: Given empty logical CPU usages, when aggregating, then empty map returned.
+    #[test]
+    fn empty_logical_cpu_load_zero() {
+        let mut core_map = BTreeMap::new();
+        core_map.insert(0, vec![0, 12]);
+        let usages: [(u32, f32); 0] = [];
+
+        let result = aggregate_core_load(&usages, &core_map);
+
+        assert!(result.is_empty());
+    }
+
+    /// BDD: Given history with 10 samples, when pushing an 11th sample,
+    ///      then VecDeque length stays at 10 (oldest dropped).
+    #[test]
+    fn load_history_max_samples_10() {
+        let mut history = BTreeMap::new();
+        let mut deque = VecDeque::new();
+        for i in 0..10 {
+            deque.push_back(i as f32);
+        }
+        history.insert(0, deque);
+
+        let mut snapshot = BTreeMap::new();
+        snapshot.insert(0, 99.0);
+
+        push_load_sample(&mut history, &snapshot);
+
+        let deque = history.get(&0).expect("core 0 should exist in history");
+        assert_eq!(deque.len(), 10);
+        assert_eq!(*deque.front().unwrap(), 1.0);
+        assert_eq!(*deque.back().unwrap(), 99.0);
+    }
+
+    /// BDD: Given empty history, when pushing a snapshot with a new core,
+    ///      then a new VecDeque entry is created for that core.
+    #[test]
+    fn load_history_missing_core_added() {
+        let mut history: BTreeMap<u32, VecDeque<f32>> = BTreeMap::new();
+        let mut snapshot = BTreeMap::new();
+        snapshot.insert(7, 42.0);
+
+        push_load_sample(&mut history, &snapshot);
+
+        let deque = history.get(&7).expect("core 7 should have been created");
+        assert_eq!(deque.len(), 1);
+        assert_eq!(*deque.back().unwrap(), 42.0);
     }
 }

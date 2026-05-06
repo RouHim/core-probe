@@ -208,10 +208,8 @@ fn parse_cpuinfo(content: &str) -> Result<CpuInfoSummary> {
         match key {
             "vendor_id" if vendor.is_none() => vendor = Some(value.to_string()),
             "model name" if model_name.is_none() => model_name = Some(value.to_string()),
-            "flags" => {
-                if value.split_whitespace().any(|flag| flag == "lm") {
-                    has_long_mode = true;
-                }
+            "flags" if value.split_whitespace().any(|flag| flag == "lm") => {
+                has_long_mode = true;
             }
             _ => {}
         }
