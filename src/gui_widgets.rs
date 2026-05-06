@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 use iced::widget::grid;
 use iced::widget::tooltip::Position as TooltipPosition;
@@ -306,6 +306,7 @@ pub struct CoreTileData<'a> {
     pub is_dark: bool,
     pub greyed_out: bool,
     pub amd_generation: crate::co_tier::AmdGeneration,
+    pub load_history: Option<&'a VecDeque<f32>>,
 }
 
 fn format_time_mm_ss(secs: u64) -> String {
@@ -398,7 +399,20 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
                 .into();
         col = col.push(progress_section);
 
-        col = col.push(Space::new().height(Length::Fixed(14.0)));
+        let sparkline_element: Element<'a, Message> = if let Some(history) = data.load_history {
+            let sparkline = sparkline_view(history, data.is_dark);
+            container(sparkline)
+                .style(|_| container::Style {
+                    background: None,
+                    ..Default::default()
+                })
+                .into()
+        } else {
+            Space::new()
+                .height(Length::Fixed(gui_theme::SPARKLINE_REGION_HEIGHT))
+                .into()
+        };
+        col = col.push(sparkline_element);
 
         col = col.push(status_row);
 
@@ -482,6 +496,7 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
     let is_dark = data.is_dark;
     let amd_generation = data.amd_generation;
     let status = data.status.clone();
+    let load_history = data.load_history;
     AnimationBuilder::new(
         ((bg, fg, border_color, secondary_color), ratio),
         move |((bg, fg, border_color, secondary_color), ratio)| {
@@ -543,7 +558,14 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
             };
             col = col.push(progress_section);
 
-            col = col.push(Space::new().height(Length::Fixed(14.0)));
+            let sparkline_element: Element<'_, Message> = if let Some(history) = load_history {
+                sparkline_view(history, is_dark)
+            } else {
+                Space::new()
+                    .height(Length::Fixed(gui_theme::SPARKLINE_REGION_HEIGHT))
+                    .into()
+            };
+            col = col.push(sparkline_element);
 
             col = col.push(status_row);
 
@@ -565,6 +587,49 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
     .animates_layout(false)
     .animation(Motion::SMOOTH)
     .into()
+}
+
+// ---------------------------------------------------------------------------
+// sparkline_view
+// ---------------------------------------------------------------------------
+
+pub fn sparkline_view<'a>(history: &'a VecDeque<f32>, is_dark: bool) -> Element<'a, Message> {
+    let mut bars = row![].align_y(iced::Alignment::End);
+
+    for i in 0..10 {
+        let load_pct = history.get(i).copied().unwrap_or(0.0);
+        let target_height = (load_pct / 100.0 * gui_theme::SPARKLINE_BAR_MAX_HEIGHT).clamp(
+            gui_theme::SPARKLINE_BAR_MIN_HEIGHT,
+            gui_theme::SPARKLINE_BAR_MAX_HEIGHT,
+        );
+
+        let base_color = gui_theme::sparkline_color(load_pct, is_dark);
+        let opacity = gui_theme::sparkline_opacity(load_pct);
+        let bar_color = iced::Color::from_rgba(base_color.r, base_color.g, base_color.b, opacity);
+
+        let bar = AnimationBuilder::new(target_height, move |h| {
+            container(Space::new().width(Length::Fixed(gui_theme::SPARKLINE_BAR_WIDTH)))
+                .height(Length::Fixed(h))
+                .style(move |_theme: &iced::Theme| container::Style {
+                    background: Some(bar_color.into()),
+                    ..Default::default()
+                })
+                .into()
+        })
+        .animates_layout(true)
+        .animation(Motion::BOUNCY);
+
+        bars = bars.push(bar);
+
+        if i < 9 {
+            bars = bars.push(Space::new().width(Length::Fixed(gui_theme::SPARKLINE_BAR_GAP)));
+        }
+    }
+
+    container(bars)
+        .height(Length::Fixed(gui_theme::SPARKLINE_REGION_HEIGHT))
+        .align_y(iced::alignment::Vertical::Bottom)
+        .into()
 }
 
 // ---------------------------------------------------------------------------
@@ -612,6 +677,7 @@ pub fn topology_grid_view<'a>(
     selected_cores: &Option<Vec<u32>>,
     core_progress: &'a BTreeMap<u32, PerCoreProgress>,
     core_results: &'a BTreeMap<u32, CoreResultInfo>,
+    core_load_history: &'a BTreeMap<u32, VecDeque<f32>>,
 ) -> Element<'a, Message> {
     let text_primary = if is_dark {
         gui_theme::DARK_TEXT_PRIMARY
@@ -669,6 +735,7 @@ pub fn topology_grid_view<'a>(
                 is_dark,
                 greyed_out,
                 amd_generation,
+                load_history: core_load_history.get(core_id),
             };
 
             grid = grid.push(core_tile_view(&tile_data));

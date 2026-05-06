@@ -378,6 +378,7 @@ pub fn view(state: &CoreProbeApp) -> Element<'_, Message> {
             &None,
             &state.core_progress,
             &state.core_results,
+            &state.core_load_history,
         )
     } else {
         container(text("CPU topology unavailable"))
