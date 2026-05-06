@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::mpsc::TryRecvError;
+use std::sync::Arc;
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 use iced::keyboard::{self, key};
@@ -9,6 +11,7 @@ use time::OffsetDateTime;
 use tracing::{info, warn};
 
 use crate::coordinator::{Coordinator, CoreStatus};
+use crate::cpu_load_poller;
 use crate::cpu_topology::{detect_cpu_topology, CpuTopology};
 use crate::embedded::ExtractedBinaries;
 use crate::error_parser::MprimeError;
@@ -124,7 +127,9 @@ pub struct CoreProbeApp {
     pub error_banner: Option<String>,
     pub modal_content: Option<ModalContent>,
     pub event_receiver: Option<EventReceiver>,
+    pub event_sender: Option<crate::gui_events::EventSender>,
     pub extracted_binaries: Option<ExtractedBinaries>,
+    pub cpu_poller_handle: Option<JoinHandle<()>>,
 }
 
 impl CoreProbeApp {
@@ -140,6 +145,8 @@ impl CoreProbeApp {
 pub fn boot() -> (CoreProbeApp, Task<Message>) {
     let topology = detect_cpu_topology().ok();
     let mut error_banner = None;
+
+    let (event_sender, event_receiver) = create_event_channel();
 
     let core_statuses = topology
         .as_ref()
@@ -163,7 +170,7 @@ pub fn boot() -> (CoreProbeApp, Task<Message>) {
         }
     };
 
-    let app = CoreProbeApp {
+    let mut app = CoreProbeApp {
         topology,
         uefi_settings,
         core_statuses,
@@ -177,9 +184,16 @@ pub fn boot() -> (CoreProbeApp, Task<Message>) {
         progress: TestProgress::default(),
         error_banner,
         modal_content: None,
-        event_receiver: None,
+        event_receiver: Some(event_receiver),
+        event_sender: Some(event_sender.clone()),
         extracted_binaries,
+        cpu_poller_handle: None,
     };
+
+    if let Some(topology) = app.topology.clone() {
+        let handle = cpu_load_poller::spawn_poller(event_sender, Arc::new(topology));
+        app.cpu_poller_handle = Some(handle);
+    }
 
     (app, Task::none())
 }
@@ -243,9 +257,14 @@ pub fn update(state: &mut CoreProbeApp, message: Message) -> Task<Message> {
                     .unwrap_or(topology.core_map.len()),
             };
 
-            let (sender, receiver) = create_event_channel();
+            let sender = match state.event_sender.clone() {
+                Some(s) => s,
+                None => {
+                    state.error_banner = Some(String::from("Event channel unavailable"));
+                    return Task::none();
+                }
+            };
             let sender_for_errors = sender.clone();
-            state.event_receiver = Some(receiver);
             state.test_running = true;
             state.error_banner = None;
 
@@ -576,7 +595,6 @@ fn process_event(state: &mut CoreProbeApp, event: TestEvent) {
         }
         TestEvent::TestCompleted { results } => {
             state.test_running = false;
-            state.event_receiver = None;
             state.progress.current_core = None;
             state.progress.total_cores = results.results.len();
             state.progress.cores_completed = results.results.len();
@@ -598,12 +616,11 @@ fn process_event(state: &mut CoreProbeApp, event: TestEvent) {
         TestEvent::TestError { message } => {
             state.error_banner = Some(message.clone());
             state.test_running = false;
-            state.event_receiver = None;
             append_log(state, LogLevel::Error, message.clone());
             send_desktop_notification("core-probe: Test Error", &message, "critical");
         }
-        TestEvent::CpuLoadSnapshot(_) => {
-            // GUI will handle snapshots in Task 5
+        TestEvent::CpuLoadSnapshot(snapshot) => {
+            push_load_sample(&mut state.core_load_history, &snapshot.loads);
         }
     }
 }
@@ -640,10 +657,7 @@ pub fn aggregate_core_load(
 /// Each physical core's history is a VecDeque capped at 10 samples.
 /// New samples are pushed to the back; old samples are popped from the front
 /// when the length exceeds the cap.
-pub fn push_load_sample(
-    history: &mut BTreeMap<u32, VecDeque<f32>>,
-    snapshot: &BTreeMap<u32, f32>,
-) {
+pub fn push_load_sample(history: &mut BTreeMap<u32, VecDeque<f32>>, snapshot: &BTreeMap<u32, f32>) {
     const MAX_SAMPLES: usize = 10;
 
     for (&phys_id, &load) in snapshot {
@@ -938,7 +952,7 @@ mod tests {
     use super::*;
     use crate::coordinator::{CoreStatus, CoreTestResult};
     use crate::cpu_topology::CpuTopology;
-    use crate::gui_events::{LogLevel, TestEvent};
+    use crate::gui_events::{create_event_channel, CpuLoadSnapshot, LogLevel, TestEvent};
 
     fn make_app() -> CoreProbeApp {
         CoreProbeApp {
@@ -956,7 +970,9 @@ mod tests {
             error_banner: None,
             modal_content: None,
             event_receiver: None,
+            event_sender: None,
             extracted_binaries: None,
+            cpu_poller_handle: None,
         }
     }
 
@@ -1793,5 +1809,59 @@ mod tests {
         let deque = history.get(&7).expect("core 7 should have been created");
         assert_eq!(deque.len(), 1);
         assert_eq!(*deque.back().unwrap(), 42.0);
+    }
+
+    // ── Tick + CpuLoadSnapshot tests ──────────────────────────────
+
+    /// BDD: Given app with channel and a CpuLoadSnapshot in the queue,
+    ///      when Tick is processed, then core_load_history populated.
+    #[test]
+    fn tick_drains_cpu_load_snapshot() {
+        let mut app = make_app();
+        let (sender, receiver) = create_event_channel();
+        app.event_receiver = Some(receiver);
+
+        let mut loads = BTreeMap::new();
+        loads.insert(0, 75.0);
+        loads.insert(1, 50.0);
+        sender
+            .send(TestEvent::CpuLoadSnapshot(CpuLoadSnapshot { loads }))
+            .expect("send should succeed");
+
+        let _ = update(&mut app, Message::Tick);
+
+        assert_eq!(app.core_load_history.len(), 2);
+        assert_eq!(
+            *app.core_load_history.get(&0).unwrap().back().unwrap(),
+            75.0
+        );
+        assert_eq!(
+            *app.core_load_history.get(&1).unwrap().back().unwrap(),
+            50.0
+        );
+    }
+
+    /// BDD: Given app with channel and 3 CpuLoadSnapshots in the queue,
+    ///      when Tick is processed, then history has all 3 samples bounded at 10.
+    #[test]
+    fn tick_multiple_snapshots() {
+        let mut app = make_app();
+        let (sender, receiver) = create_event_channel();
+        app.event_receiver = Some(receiver);
+
+        for i in 0..3 {
+            let mut loads = BTreeMap::new();
+            loads.insert(0, i as f32);
+            sender
+                .send(TestEvent::CpuLoadSnapshot(CpuLoadSnapshot { loads }))
+                .expect("send should succeed");
+        }
+
+        let _ = update(&mut app, Message::Tick);
+
+        let history = app.core_load_history.get(&0).expect("core 0 should exist");
+        assert_eq!(history.len(), 3, "should have 3 samples");
+        assert_eq!(*history.front().unwrap(), 0.0);
+        assert_eq!(*history.back().unwrap(), 2.0);
     }
 }

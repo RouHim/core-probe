@@ -1075,8 +1075,18 @@ mod tests {
     #[test]
     fn given_zero_load_when_querying_sparkline_color_then_green_dominant() {
         let c = sparkline_color(0.0, true);
-        assert!(c.g > c.r, "green ({}) should exceed red ({}) at 0% load", c.g, c.r);
-        assert!(c.g > c.b, "green ({}) should exceed blue ({}) at 0% load", c.g, c.b);
+        assert!(
+            c.g > c.r,
+            "green ({}) should exceed red ({}) at 0% load",
+            c.g,
+            c.r
+        );
+        assert!(
+            c.g > c.b,
+            "green ({}) should exceed blue ({}) at 0% load",
+            c.g,
+            c.b
+        );
     }
 
     /// BDD: Given full load, when querying sparkline colour, then red
@@ -1084,8 +1094,18 @@ mod tests {
     #[test]
     fn given_full_load_when_querying_sparkline_color_then_red_dominant() {
         let c = sparkline_color(100.0, true);
-        assert!(c.r > c.g, "red ({}) should exceed green ({}) at 100% load", c.r, c.g);
-        assert!(c.r > c.b, "red ({}) should exceed blue ({}) at 100% load", c.r, c.b);
+        assert!(
+            c.r > c.g,
+            "red ({}) should exceed green ({}) at 100% load",
+            c.r,
+            c.g
+        );
+        assert!(
+            c.r > c.b,
+            "red ({}) should exceed blue ({}) at 100% load",
+            c.r,
+            c.b
+        );
     }
 
     /// BDD: Given the same sparkline load, when comparing dark and light theme

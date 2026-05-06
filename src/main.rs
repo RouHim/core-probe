@@ -5,6 +5,7 @@ pub mod co_offsets;
 pub mod co_reader;
 pub mod co_tier;
 pub mod coordinator;
+pub mod cpu_load_poller;
 pub mod cpu_topology;
 pub mod embedded;
 pub mod error_parser;
