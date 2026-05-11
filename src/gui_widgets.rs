@@ -594,17 +594,34 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
 // ---------------------------------------------------------------------------
 
 pub fn sparkline_view<'a>(history: &'a VecDeque<f32>, is_dark: bool) -> Element<'a, Message> {
+    let load_pct = history.back().copied().unwrap_or(0.0);
+
     let mut bars = row![].align_y(iced::Alignment::End);
 
     for i in 0..10 {
-        let load_pct = history.get(i).copied().unwrap_or(0.0);
-        let target_height = (load_pct / 100.0 * gui_theme::SPARKLINE_BAR_MAX_HEIGHT).clamp(
-            gui_theme::SPARKLINE_BAR_MIN_HEIGHT,
-            gui_theme::SPARKLINE_BAR_MAX_HEIGHT,
-        );
+        let threshold = i as f32 * 10.0;
+        let is_lit = load_pct >= threshold;
+        let target_height = if is_lit {
+            gui_theme::SPARKLINE_BAR_MAX_HEIGHT
+        } else {
+            gui_theme::SPARKLINE_BAR_MIN_HEIGHT
+        };
 
-        let base_color = gui_theme::sparkline_color(load_pct, is_dark);
-        let opacity = gui_theme::sparkline_opacity(load_pct);
+        let segment_color_load = match i {
+            0 => 0.0,
+            1 => 15.0,
+            2 => 30.0,
+            3 => 40.0,
+            4 => 50.0,
+            5 => 60.0,
+            6 => 75.0,
+            7 => 85.0,
+            8 => 95.0,
+            9 => 100.0,
+            _ => 0.0,
+        };
+        let base_color = gui_theme::sparkline_color(segment_color_load, is_dark);
+        let opacity = if is_lit { 1.0 } else { 0.15 };
         let bar_color = iced::Color::from_rgba(base_color.r, base_color.g, base_color.b, opacity);
 
         let bar = AnimationBuilder::new(target_height, move |h| {
@@ -625,6 +642,9 @@ pub fn sparkline_view<'a>(history: &'a VecDeque<f32>, is_dark: bool) -> Element<
             bars = bars.push(Space::new().width(Length::Fixed(gui_theme::SPARKLINE_BAR_GAP)));
         }
     }
+
+    bars = bars.push(Space::new().width(Length::Fixed(4.0)));
+    bars = bars.push(text(format!("{:.0}%", load_pct)).size(10));
 
     container(bars)
         .height(Length::Fixed(gui_theme::SPARKLINE_REGION_HEIGHT))

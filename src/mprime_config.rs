@@ -150,7 +150,7 @@ impl Default for MprimeConfig {
     fn default() -> Self {
         Self {
             mode: StressTestMode::SSE,
-            fft_preset: FftPreset::default(),
+            fft_preset: FftPreset::Large,
             torture_time: 3,
             memory: 0,
             threads: 1,
@@ -608,14 +608,14 @@ mod tests {
         // When: Generating configuration
         let result = config.generate().expect("should generate config");
 
-        // Then: Default uses Moderate FFT range (benchmark-proven fastest for PBO detection)
+        // Then: Default uses Large FFT range
         assert!(
-            result.contains("MinTortureFFT=1344"),
-            "default should use Moderate FFT min"
+            result.contains("MinTortureFFT=426"),
+            "default should use Large FFT min"
         );
         assert!(
-            result.contains("MaxTortureFFT=4096"),
-            "default should use Moderate FFT max"
+            result.contains("MaxTortureFFT=8192"),
+            "default should use Large FFT max"
         );
     }
 

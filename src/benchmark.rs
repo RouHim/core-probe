@@ -24,7 +24,7 @@ const BENCHMARK_TIMEOUT: Duration = Duration::from_secs(180);
 pub struct BenchmarkResult {
     pub preset: FftPreset,
     pub iteration: u32,
-    pub time_to_error: Option<Duration>,
+    pub time_to_error: Option<f64>,
     pub error_type: Option<MprimeErrorType>,
     pub fft_size: Option<u32>,
     pub timed_out: bool,
@@ -34,9 +34,9 @@ pub struct BenchmarkResult {
 pub struct PresetSummary {
     pub preset: FftPreset,
     pub results: Vec<BenchmarkResult>,
-    pub fastest: Option<Duration>,
-    pub average: Option<Duration>,
-    pub slowest: Option<Duration>,
+    pub fastest: Option<f64>,
+    pub average: Option<f64>,
+    pub slowest: Option<f64>,
     pub error_rate: f64,
 }
 
@@ -167,7 +167,7 @@ pub fn run_benchmark(
                         })?;
 
                         if let Some(first_error) = errors.first() {
-                            result.time_to_error = Some(elapsed);
+                            result.time_to_error = Some(elapsed.as_secs_f64());
                             result.error_type = Some(first_error.error_type.clone());
                             result.fft_size = first_error.fft_size;
                             runner
@@ -188,13 +188,13 @@ pub fn run_benchmark(
                     if results_path.exists() {
                         let errors = parser.parse_results(&results_path)?;
                         if let Some(first_error) = errors.first() {
-                            result.time_to_error = Some(elapsed);
+                            result.time_to_error = Some(elapsed.as_secs_f64());
                             result.error_type = Some(first_error.error_type.clone());
                             result.fft_size = first_error.fft_size;
                         }
                     }
                     if result.time_to_error.is_none() {
-                        result.time_to_error = Some(elapsed);
+                        result.time_to_error = Some(elapsed.as_secs_f64());
                         result.error_type = Some(MprimeErrorType::Unknown);
                     }
                     break;
@@ -231,19 +231,19 @@ pub fn run_benchmark(
 }
 
 fn summarize_preset(preset: FftPreset, results: Vec<BenchmarkResult>) -> PresetSummary {
-    let mut error_times: Vec<Duration> = results
+    let mut error_times: Vec<f64> = results
         .iter()
         .filter_map(|result| result.time_to_error)
         .collect();
-    error_times.sort_unstable();
+    error_times.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
     let fastest = error_times.first().copied();
     let slowest = error_times.last().copied();
     let average = if error_times.is_empty() {
         None
     } else {
-        let total_secs: u64 = error_times.iter().map(Duration::as_secs).sum();
-        Some(Duration::from_secs(total_secs / error_times.len() as u64))
+        let total_secs: f64 = error_times.iter().sum();
+        Some(total_secs / error_times.len() as f64)
     };
 
     let error_count = results
@@ -270,7 +270,11 @@ fn select_winner(summaries: &[PresetSummary]) -> Option<FftPreset> {
     summaries
         .iter()
         .filter_map(|summary| summary.average.map(|avg| (summary.preset, avg)))
-        .min_by_key(|(_, avg)| *avg)
+        .min_by(|(_, avg_a), (_, avg_b)| {
+            avg_a
+                .partial_cmp(avg_b)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
         .map(|(preset, _)| preset)
 }
 
@@ -305,7 +309,13 @@ impl fmt::Display for BenchmarkReport {
             .iter()
             .filter(|summary| summary.average.is_some())
             .collect();
-        ranked.sort_by_key(|summary| summary.average);
+        ranked.sort_by(|a, b| {
+            let avg_a = a.average.unwrap_or(f64::INFINITY);
+            let avg_b = b.average.unwrap_or(f64::INFINITY);
+            avg_a
+                .partial_cmp(&avg_b)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         for (index, summary) in ranked.iter().enumerate() {
             let (min_fft, max_fft) = summary.preset.fft_range_kb();
@@ -373,7 +383,7 @@ impl fmt::Display for BenchmarkReport {
                 write_line(
                     f,
                     WIDTH,
-                    " WARNING: No errors detected for any preset. Core 2 may be stable.",
+                    " WARNING: No errors detected for any preset. Core 2 may be stable, or PBO settings are insufficient.",
                 )?;
             }
         }
@@ -382,7 +392,7 @@ impl fmt::Display for BenchmarkReport {
             WIDTH,
             &format!(
                 " Total benchmark duration: {}",
-                format_duration_human(self.total_duration)
+                format_duration_human(self.total_duration.as_secs_f64())
             ),
         )?;
         write!(f, "{bottom}")
@@ -408,18 +418,18 @@ fn write_line(f: &mut fmt::Formatter<'_>, width: usize, text: &str) -> fmt::Resu
     writeln!(f, "║{}{}║", text, " ".repeat(padding))
 }
 
-fn format_duration_human(duration: Duration) -> String {
-    let total_secs = duration.as_secs();
+fn format_duration_human(seconds: f64) -> String {
+    let total_secs = seconds as u64;
     let hours = total_secs / 3600;
     let minutes = (total_secs % 3600) / 60;
-    let seconds = total_secs % 60;
+    let secs = total_secs % 60;
 
     if hours > 0 {
         format!("{}h {}m", hours, minutes)
     } else if minutes > 0 {
-        format!("{}m {}s", minutes, seconds)
+        format!("{}m {}s", minutes, secs)
     } else {
-        format!("{}s", seconds)
+        format!("{:.1}s", seconds)
     }
 }
 
@@ -435,7 +445,7 @@ mod tests {
                 BenchmarkResult {
                     preset: FftPreset::Huge,
                     iteration: 1,
-                    time_to_error: Some(Duration::from_secs(60)),
+                    time_to_error: Some(60.0),
                     error_type: Some(MprimeErrorType::RoundoffError),
                     fft_size: Some(1344),
                     timed_out: false,
@@ -451,7 +461,7 @@ mod tests {
                 BenchmarkResult {
                     preset: FftPreset::Huge,
                     iteration: 3,
-                    time_to_error: Some(Duration::from_secs(120)),
+                    time_to_error: Some(120.0),
                     error_type: Some(MprimeErrorType::FatalError),
                     fft_size: None,
                     timed_out: false,
@@ -459,9 +469,9 @@ mod tests {
             ],
         );
 
-        assert_eq!(summary.fastest, Some(Duration::from_secs(60)));
-        assert_eq!(summary.average, Some(Duration::from_secs(90)));
-        assert_eq!(summary.slowest, Some(Duration::from_secs(120)));
+        assert_eq!(summary.fastest, Some(60.0));
+        assert_eq!(summary.average, Some(90.0));
+        assert_eq!(summary.slowest, Some(120.0));
         assert!((summary.error_rate - (2.0 / 3.0)).abs() < f64::EPSILON);
     }
 

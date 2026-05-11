@@ -104,7 +104,7 @@ impl ErrorParser {
     /// Extract timestamp from line if present (format: [2025-01-15 12:34:56])
     fn extract_timestamp(line: &str) -> Option<String> {
         static RE: OnceLock<Regex> = OnceLock::new();
-        let re = RE.get_or_init(|| Regex::new(r"\[([^\]]+)\]").unwrap());
+        let re = RE.get_or_init(|| Regex::new(r"\[([^\]]+)\]").expect("timestamp regex is valid"));
         re.captures(line)
             .and_then(|cap| cap.get(1))
             .map(|m| m.as_str().to_string())
@@ -114,7 +114,7 @@ impl ErrorParser {
         static RE: OnceLock<Regex> = OnceLock::new();
         let re = RE.get_or_init(|| {
             Regex::new(r"(?i)ROUND\s*OFF\s*>\s*0\.4|Rounding was .*, expected less than 0\.4")
-                .unwrap()
+                .expect("roundoff error regex is valid")
         });
         if re.is_match(line) {
             Some(MprimeError {
@@ -131,7 +131,8 @@ impl ErrorParser {
     fn try_hardware_failure(line: &str) -> Option<MprimeError> {
         static RE: OnceLock<Regex> = OnceLock::new();
         let re = RE.get_or_init(|| {
-            Regex::new(r"(?i)Hardware failure detected running (\d+)K FFT").unwrap()
+            Regex::new(r"(?i)Hardware failure detected running (\d+)K FFT")
+                .expect("hardware failure regex is valid")
         });
         if let Some(cap) = re.captures(line) {
             let fft_size = cap.get(1).and_then(|m| m.as_str().parse::<u32>().ok());
@@ -148,7 +149,8 @@ impl ErrorParser {
 
     fn try_fatal_error(line: &str) -> Option<MprimeError> {
         static RE: OnceLock<Regex> = OnceLock::new();
-        let re = RE.get_or_init(|| Regex::new(r"(?i)FATAL ERROR").unwrap());
+        let re =
+            RE.get_or_init(|| Regex::new(r"(?i)FATAL ERROR").expect("fatal error regex is valid"));
         if re.is_match(line) {
             Some(MprimeError {
                 error_type: MprimeErrorType::FatalError,
@@ -163,7 +165,10 @@ impl ErrorParser {
 
     fn try_possible_hardware_failure(line: &str) -> Option<MprimeError> {
         static RE: OnceLock<Regex> = OnceLock::new();
-        let re = RE.get_or_init(|| Regex::new(r"(?i)Possible hardware failure").unwrap());
+        let re = RE.get_or_init(|| {
+            Regex::new(r"(?i)Possible hardware failure")
+                .expect("possible hardware failure regex is valid")
+        });
         if re.is_match(line) {
             Some(MprimeError {
                 error_type: MprimeErrorType::PossibleHardwareFailure,
@@ -178,7 +183,9 @@ impl ErrorParser {
 
     fn try_illegal_sumout(line: &str) -> Option<MprimeError> {
         static RE: OnceLock<Regex> = OnceLock::new();
-        let re = RE.get_or_init(|| Regex::new(r"(?i)ILLEGAL SUMOUT").unwrap());
+        let re = RE.get_or_init(|| {
+            Regex::new(r"(?i)ILLEGAL SUMOUT").expect("illegal sumout regex is valid")
+        });
         if re.is_match(line) {
             Some(MprimeError {
                 error_type: MprimeErrorType::IllegalSumout,
@@ -193,7 +200,10 @@ impl ErrorParser {
 
     fn try_sum_mismatch(line: &str) -> Option<MprimeError> {
         static RE: OnceLock<Regex> = OnceLock::new();
-        let re = RE.get_or_init(|| Regex::new(r"(?i)SUM\(INPUTS\)\s*!=\s*SUM\(OUTPUTS\)").unwrap());
+        let re = RE.get_or_init(|| {
+            Regex::new(r"(?i)SUM\(INPUTS\)\s*!=\s*SUM\(OUTPUTS\)")
+                .expect("sum mismatch regex is valid")
+        });
         if re.is_match(line) {
             Some(MprimeError {
                 error_type: MprimeErrorType::SumMismatch,
@@ -208,7 +218,9 @@ impl ErrorParser {
 
     fn try_torture_test_failed(line: &str) -> Option<MprimeError> {
         static RE: OnceLock<Regex> = OnceLock::new();
-        let re = RE.get_or_init(|| Regex::new(r"(?i)TORTURE TEST FAILED").unwrap());
+        let re = RE.get_or_init(|| {
+            Regex::new(r"(?i)TORTURE TEST FAILED").expect("torture test failed regex is valid")
+        });
         if re.is_match(line) {
             Some(MprimeError {
                 error_type: MprimeErrorType::TortureTestFailed,
@@ -225,7 +237,7 @@ impl ErrorParser {
         static RE: OnceLock<Regex> = OnceLock::new();
         let re = RE.get_or_init(|| {
             Regex::new(r"(?i)Torture Test completed \d+ tests? in \d+ minutes? - (\d+) errors?")
-                .unwrap()
+                .expect("selftest error regex is valid")
         });
         let caps = re.captures(line)?;
         let errors: u32 = caps.get(1)?.as_str().parse().ok()?;
@@ -243,7 +255,9 @@ impl ErrorParser {
     /// Extract last passed FFT size from "Self-test {size}K passed" lines
     pub fn extract_last_passed_fft(text: &str) -> Option<u32> {
         static RE: OnceLock<Regex> = OnceLock::new();
-        let re = RE.get_or_init(|| Regex::new(r"(?i)Self-test (\d+)K passed").unwrap());
+        let re = RE.get_or_init(|| {
+            Regex::new(r"(?i)Self-test (\d+)K passed").expect("selftest passed regex is valid")
+        });
 
         text.lines()
             .filter_map(|line| {
