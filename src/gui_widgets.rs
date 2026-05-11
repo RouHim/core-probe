@@ -399,6 +399,8 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
                 .into();
         col = col.push(progress_section);
 
+        col = col.push(status_row);
+
         let sparkline_element: Element<'a, Message> = if let Some(history) = data.load_history {
             let sparkline = sparkline_view(history, data.is_dark);
             container(sparkline)
@@ -413,8 +415,6 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
                 .into()
         };
         col = col.push(sparkline_element);
-
-        col = col.push(status_row);
 
         let border_color = gui_theme::status_border_color(data.status, data.is_dark);
         let border_width = if *data.status == CoreStatus::Failed {
@@ -558,6 +558,8 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
             };
             col = col.push(progress_section);
 
+            col = col.push(status_row);
+
             let sparkline_element: Element<'_, Message> = if let Some(history) = load_history {
                 sparkline_view(history, is_dark)
             } else {
@@ -566,8 +568,6 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
                     .into()
             };
             col = col.push(sparkline_element);
-
-            col = col.push(status_row);
 
             container(col)
                 .width(Length::Fill)

@@ -701,13 +701,13 @@ pub const SPARKLINE_BAR_WIDTH: f32 = 6.0;
 pub const SPARKLINE_BAR_GAP: f32 = 2.0;
 
 /// Maximum bar height (100 % load) in logical pixels.
-pub const SPARKLINE_BAR_MAX_HEIGHT: f32 = 24.0;
+pub const SPARKLINE_BAR_MAX_HEIGHT: f32 = 12.0;
 
 /// Minimum bar height (0 % load) in logical pixels.
 pub const SPARKLINE_BAR_MIN_HEIGHT: f32 = 4.0;
 
 /// Total height of the sparkline region in logical pixels.
-pub const SPARKLINE_REGION_HEIGHT: f32 = 30.0;
+pub const SPARKLINE_REGION_HEIGHT: f32 = 15.0;
 
 // ---------------------------------------------------------------------------
 // Sparkline colour / opacity helpers
