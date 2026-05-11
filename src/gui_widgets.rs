@@ -596,7 +596,7 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
 pub fn sparkline_view<'a>(history: &'a VecDeque<f32>, is_dark: bool) -> Element<'a, Message> {
     let load_pct = history.back().copied().unwrap_or(0.0);
 
-    let mut bars = row![].align_y(iced::Alignment::End);
+    let mut bars = row![].align_y(iced::Alignment::End).spacing(2);
 
     for i in 0..10 {
         let threshold = i as f32 * 10.0;
@@ -619,7 +619,7 @@ pub fn sparkline_view<'a>(history: &'a VecDeque<f32>, is_dark: bool) -> Element<
         let opacity = if is_lit { 1.0 } else { 0.05 };
         let bar_color = iced::Color::from_rgba(base_color.r, base_color.g, base_color.b, opacity);
 
-        let bar = container(Space::new().width(Length::Fixed(gui_theme::SPARKLINE_BAR_WIDTH)))
+        let bar = container(Space::new().width(Length::Fill))
             .height(Length::Fixed(gui_theme::SPARKLINE_BAR_MAX_HEIGHT))
             .style(move |_theme: &iced::Theme| container::Style {
                 background: Some(bar_color.into()),
@@ -627,16 +627,12 @@ pub fn sparkline_view<'a>(history: &'a VecDeque<f32>, is_dark: bool) -> Element<
             });
 
         bars = bars.push(bar);
-
-        if i < 9 {
-            bars = bars.push(Space::new().width(Length::Fixed(gui_theme::SPARKLINE_BAR_GAP)));
-        }
     }
 
-    bars = bars.push(Space::new().width(Length::Fixed(4.0)));
     bars = bars.push(text(format!("{:.0}%", load_pct)).size(10));
 
     container(bars)
+        .width(Length::Fill)
         .height(Length::Fixed(gui_theme::SPARKLINE_REGION_HEIGHT))
         .align_y(iced::alignment::Vertical::Bottom)
         .into()
