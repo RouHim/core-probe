@@ -601,11 +601,6 @@ pub fn sparkline_view<'a>(history: &'a VecDeque<f32>, is_dark: bool) -> Element<
     for i in 0..10 {
         let threshold = i as f32 * 10.0;
         let is_lit = load_pct >= threshold;
-        let target_height = if is_lit {
-            gui_theme::SPARKLINE_BAR_MAX_HEIGHT
-        } else {
-            gui_theme::SPARKLINE_BAR_MIN_HEIGHT
-        };
 
         let segment_color_load = match i {
             0 => 0.0,
@@ -621,20 +616,15 @@ pub fn sparkline_view<'a>(history: &'a VecDeque<f32>, is_dark: bool) -> Element<
             _ => 0.0,
         };
         let base_color = gui_theme::sparkline_color(segment_color_load, is_dark);
-        let opacity = if is_lit { 1.0 } else { 0.15 };
+        let opacity = if is_lit { 1.0 } else { 0.05 };
         let bar_color = iced::Color::from_rgba(base_color.r, base_color.g, base_color.b, opacity);
 
-        let bar = AnimationBuilder::new(target_height, move |h| {
-            container(Space::new().width(Length::Fixed(gui_theme::SPARKLINE_BAR_WIDTH)))
-                .height(Length::Fixed(h))
-                .style(move |_theme: &iced::Theme| container::Style {
-                    background: Some(bar_color.into()),
-                    ..Default::default()
-                })
-                .into()
-        })
-        .animates_layout(true)
-        .animation(Motion::BOUNCY);
+        let bar = container(Space::new().width(Length::Fixed(gui_theme::SPARKLINE_BAR_WIDTH)))
+            .height(Length::Fixed(gui_theme::SPARKLINE_BAR_MAX_HEIGHT))
+            .style(move |_theme: &iced::Theme| container::Style {
+                background: Some(bar_color.into()),
+                ..Default::default()
+            });
 
         bars = bars.push(bar);
 
