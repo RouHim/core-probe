@@ -199,9 +199,9 @@ pub const DARK_CARD_BORDER: Color = Color::from_rgb(
     0x3a as f32 / 255.0,
 );
 pub const LIGHT_CARD_BORDER: Color = Color::from_rgb(
-    0xc5 as f32 / 255.0,
-    0xc2 as f32 / 255.0,
-    0xbd as f32 / 255.0,
+    0xd0 as f32 / 255.0,
+    0xd0 as f32 / 255.0,
+    0xd0 as f32 / 255.0,
 );
 
 // ---------------------------------------------------------------------------
@@ -214,9 +214,9 @@ pub const DARK_CCD_BG: Color = Color::from_rgb(
     0x18 as f32 / 255.0,
 );
 pub const LIGHT_CCD_BG: Color = Color::from_rgb(
-    0xf0 as f32 / 255.0,
-    0xee as f32 / 255.0,
-    0xec as f32 / 255.0,
+    0xf5 as f32 / 255.0,
+    0xf5 as f32 / 255.0,
+    0xf5 as f32 / 255.0,
 );
 pub const DARK_CCD_BORDER: Color = Color::from_rgb(
     0x30 as f32 / 255.0,
@@ -224,9 +224,9 @@ pub const DARK_CCD_BORDER: Color = Color::from_rgb(
     0x30 as f32 / 255.0,
 );
 pub const LIGHT_CCD_BORDER: Color = Color::from_rgb(
-    0xb8 as f32 / 255.0,
-    0xb5 as f32 / 255.0,
-    0xb0 as f32 / 255.0,
+    0xcc as f32 / 255.0,
+    0xcc as f32 / 255.0,
+    0xcc as f32 / 255.0,
 );
 
 // ---------------------------------------------------------------------------
@@ -236,17 +236,17 @@ pub const LIGHT_CCD_BORDER: Color = Color::from_rgb(
 pub const LIGHT_BG_PRIMARY: Color = Color::from_rgb(
     0xf5 as f32 / 255.0,
     0xf5 as f32 / 255.0,
-    0xf3 as f32 / 255.0,
+    0xf5 as f32 / 255.0,
 );
 pub const LIGHT_BG_SECONDARY: Color = Color::from_rgb(
-    0xfa as f32 / 255.0,
-    0xfa as f32 / 255.0,
-    0xf8 as f32 / 255.0,
+    0xff as f32 / 255.0,
+    0xff as f32 / 255.0,
+    0xff as f32 / 255.0,
 );
 pub const LIGHT_BG_TERTIARY: Color = Color::from_rgb(
-    0xe8 as f32 / 255.0,
-    0xe6 as f32 / 255.0,
-    0xe3 as f32 / 255.0,
+    0xe0 as f32 / 255.0,
+    0xe0 as f32 / 255.0,
+    0xe0 as f32 / 255.0,
 );
 
 pub const LIGHT_TEXT_PRIMARY: Color = Color::BLACK;
@@ -262,19 +262,19 @@ pub const LIGHT_TEXT_MUTED: Color = Color::from_rgb(
 );
 
 pub const LIGHT_BORDER: Color = Color::from_rgb(
-    0xb8 as f32 / 255.0,
-    0xb5 as f32 / 255.0,
-    0xb0 as f32 / 255.0,
+    0xcc as f32 / 255.0,
+    0xcc as f32 / 255.0,
+    0xcc as f32 / 255.0,
 );
 pub const LIGHT_HEADER_BG: Color = Color::from_rgb(
-    0xea as f32 / 255.0,
-    0xe8 as f32 / 255.0,
-    0xe5 as f32 / 255.0,
+    0xee as f32 / 255.0,
+    0xee as f32 / 255.0,
+    0xee as f32 / 255.0,
 );
 pub const LIGHT_STATUS_BAR_BG: Color = Color::from_rgb(
-    0xea as f32 / 255.0,
-    0xe8 as f32 / 255.0,
-    0xe5 as f32 / 255.0,
+    0xee as f32 / 255.0,
+    0xee as f32 / 255.0,
+    0xee as f32 / 255.0,
 );
 
 pub const LIGHT_PROGRESS_FILL: Color = Color::from_rgb(
@@ -283,15 +283,15 @@ pub const LIGHT_PROGRESS_FILL: Color = Color::from_rgb(
     0x50 as f32 / 255.0,
 );
 pub const LIGHT_PROGRESS_BG: Color = Color::from_rgb(
-    0xe5 as f32 / 255.0,
-    0xe3 as f32 / 255.0,
+    0xe0 as f32 / 255.0,
+    0xe0 as f32 / 255.0,
     0xe0 as f32 / 255.0,
 );
 
 pub const LIGHT_LOG_BG: Color = Color::from_rgb(
-    0xf8 as f32 / 255.0,
-    0xf8 as f32 / 255.0,
-    0xf6 as f32 / 255.0,
+    0xff as f32 / 255.0,
+    0xff as f32 / 255.0,
+    0xff as f32 / 255.0,
 );
 
 pub const LIGHT_BADGE_PBO_BG: Color = Color::from_rgb(
@@ -306,8 +306,8 @@ pub const LIGHT_BADGE_PBO_TEXT: Color = Color::from_rgb(
 );
 
 pub const LIGHT_BUTTON_BG: Color = Color::from_rgb(
-    0xe5 as f32 / 255.0,
-    0xe3 as f32 / 255.0,
+    0xe0 as f32 / 255.0,
+    0xe0 as f32 / 255.0,
     0xe0 as f32 / 255.0,
 );
 pub const LIGHT_BUTTON_TEXT: Color = Color::BLACK;
@@ -422,6 +422,11 @@ const DARK_CORE_INTERRUPTED_BG: Color = Color::from_rgb(
     0x00 as f32 / 255.0,
 );
 
+const DARK_CORE_INTERRUPTED_TEXT: Color = Color::from_rgb(
+    0xff as f32 / 255.0,
+    0xff as f32 / 255.0,
+    0xff as f32 / 255.0,
+);
 // ---------------------------------------------------------------------------
 // Light core status colors
 // ---------------------------------------------------------------------------
@@ -471,9 +476,9 @@ const LIGHT_CORE_SKIPPED_TEXT: Color = Color::from_rgb(
 );
 
 const LIGHT_CORE_IDLE_BG: Color = Color::from_rgb(
-    0xf0 as f32 / 255.0,
     0xee as f32 / 255.0,
-    0xec as f32 / 255.0,
+    0xee as f32 / 255.0,
+    0xee as f32 / 255.0,
 );
 const LIGHT_CORE_IDLE_TEXT: Color = Color::from_rgb(
     0x42 as f32 / 255.0,
@@ -485,6 +490,11 @@ const LIGHT_CORE_INTERRUPTED_BG: Color = Color::from_rgb(
     0xff as f32 / 255.0,
     0xe0 as f32 / 255.0,
     0xb2 as f32 / 255.0,
+);
+const LIGHT_CORE_INTERRUPTED_TEXT: Color = Color::from_rgb(
+    0x00 as f32 / 255.0,
+    0x00 as f32 / 255.0,
+    0x00 as f32 / 255.0,
 );
 
 // ---------------------------------------------------------------------------
@@ -623,8 +633,7 @@ pub fn status_bg_color(status: &CoreStatus, is_dark: bool) -> Color {
     }
 }
 
-/// Interrupted has no dedicated text override in the wireframe — uses the
-/// default text color for the active theme.
+/// Returns the text color for a core status tile.
 pub fn status_text_color(status: &CoreStatus, is_dark: bool) -> Color {
     match (status, is_dark) {
         (CoreStatus::Passed, true) => DARK_CORE_PASSED_TEXT,
@@ -637,8 +646,8 @@ pub fn status_text_color(status: &CoreStatus, is_dark: bool) -> Color {
         (CoreStatus::Skipped, false) => LIGHT_CORE_SKIPPED_TEXT,
         (CoreStatus::Idle, true) => DARK_CORE_IDLE_TEXT,
         (CoreStatus::Idle, false) => LIGHT_CORE_IDLE_TEXT,
-        (CoreStatus::Interrupted, true) => DARK_TEXT_PRIMARY,
-        (CoreStatus::Interrupted, false) => LIGHT_TEXT_PRIMARY,
+        (CoreStatus::Interrupted, true) => DARK_CORE_INTERRUPTED_TEXT,
+        (CoreStatus::Interrupted, false) => LIGHT_CORE_INTERRUPTED_TEXT,
     }
 }
 
@@ -838,11 +847,11 @@ mod tests {
     fn given_interrupted_status_when_querying_text_then_uses_default_text_color() {
         assert_eq!(
             status_text_color(&CoreStatus::Interrupted, true),
-            DARK_TEXT_PRIMARY
+            DARK_CORE_INTERRUPTED_TEXT
         );
         assert_eq!(
             status_text_color(&CoreStatus::Interrupted, false),
-            LIGHT_TEXT_PRIMARY
+            LIGHT_CORE_INTERRUPTED_TEXT
         );
     }
 

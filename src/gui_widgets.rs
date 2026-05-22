@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 
 use iced::widget::grid;
 use iced::widget::tooltip::Position as TooltipPosition;
@@ -74,9 +74,15 @@ pub fn header_view<'a>(
         "{}C/{}T",
         topology.physical_core_count, topology.logical_cpu_count
     );
+    let generation = crate::co_tier::detect_generation(&topology.model_name);
+    let gen_badge = format!("Generation: {generation}");
     let left = column![
         text(&topology.model_name).size(20).color(text_primary),
-        text(core_thread_badge).size(14).color(text_secondary),
+        row![
+            text(core_thread_badge).size(14).color(text_secondary),
+            text(gen_badge).size(14).color(text_secondary),
+        ]
+        .spacing(12),
     ]
     .spacing(4)
     .width(Length::FillPortion(3));
@@ -148,8 +154,16 @@ fn build_uefi_section<'a>(
     let (badge_bg, badge_fg) = match pbo_text_val {
         "PBO: ENABLED" => (pbo_badge_bg, pbo_badge_text),
         "PBO: DISABLED" => (
-            iced::Color::from_rgb(0.4, 0.1, 0.1),
-            iced::Color::from_rgb(1.0, 0.7, 0.7),
+            if is_dark {
+                iced::Color::from_rgb(0.4, 0.1, 0.1)
+            } else {
+                iced::Color::from_rgb(1.0, 0.8, 0.8)
+            },
+            if is_dark {
+                iced::Color::from_rgb(1.0, 0.7, 0.7)
+            } else {
+                iced::Color::from_rgb(0.65, 0.1, 0.1)
+            },
         ),
         "PBO: AUTO" => (
             if is_dark {
@@ -306,7 +320,7 @@ pub struct CoreTileData<'a> {
     pub is_dark: bool,
     pub greyed_out: bool,
     pub amd_generation: crate::co_tier::AmdGeneration,
-    pub load_history: Option<&'a VecDeque<f32>>,
+    pub load_smoothed: Option<f32>,
 }
 
 fn format_time_mm_ss(secs: u64) -> String {
@@ -401,8 +415,8 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
 
         col = col.push(status_row);
 
-        let sparkline_element: Element<'a, Message> = if let Some(history) = data.load_history {
-            let sparkline = sparkline_view(history, data.is_dark);
+        let sparkline_element: Element<'a, Message> = if let Some(load) = data.load_smoothed {
+            let sparkline = sparkline_view(load, data.is_dark);
             container(sparkline)
                 .style(|_| container::Style {
                     background: None,
@@ -496,7 +510,7 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
     let is_dark = data.is_dark;
     let amd_generation = data.amd_generation;
     let status = data.status.clone();
-    let load_history = data.load_history;
+    let load_smoothed = data.load_smoothed;
     AnimationBuilder::new(
         ((bg, fg, border_color, secondary_color), ratio),
         move |((bg, fg, border_color, secondary_color), ratio)| {
@@ -560,8 +574,8 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
 
             col = col.push(status_row);
 
-            let sparkline_element: Element<'_, Message> = if let Some(history) = load_history {
-                sparkline_view(history, is_dark)
+            let sparkline_element: Element<'_, Message> = if let Some(load) = load_smoothed {
+                sparkline_view(load, is_dark)
             } else {
                 Space::new()
                     .height(Length::Fixed(gui_theme::SPARKLINE_REGION_HEIGHT))
@@ -593,28 +607,14 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
 // sparkline_view
 // ---------------------------------------------------------------------------
 
-pub fn sparkline_view<'a>(history: &'a VecDeque<f32>, is_dark: bool) -> Element<'a, Message> {
-    let load_pct = history.back().copied().unwrap_or(0.0);
-
+pub fn sparkline_view<'a>(load_pct: f32, is_dark: bool) -> Element<'a, Message> {
     let mut bars = row![].align_y(iced::Alignment::End).spacing(2);
 
-    for i in 0..10 {
-        let threshold = i as f32 * 10.0;
+    for i in 0..20 {
+        let threshold = i as f32 * 5.0;
         let is_lit = load_pct >= threshold;
 
-        let segment_color_load = match i {
-            0 => 0.0,
-            1 => 15.0,
-            2 => 30.0,
-            3 => 40.0,
-            4 => 50.0,
-            5 => 60.0,
-            6 => 75.0,
-            7 => 85.0,
-            8 => 95.0,
-            9 => 100.0,
-            _ => 0.0,
-        };
+        let segment_color_load = (i as f32 * 100.0 / 19.0).min(100.0);
         let base_color = gui_theme::sparkline_color(segment_color_load, is_dark);
         let opacity = if is_lit { 1.0 } else { 0.05 };
         let bar_color = iced::Color::from_rgba(base_color.r, base_color.g, base_color.b, opacity);
@@ -683,7 +683,7 @@ pub fn topology_grid_view<'a>(
     selected_cores: &Option<Vec<u32>>,
     core_progress: &'a BTreeMap<u32, PerCoreProgress>,
     core_results: &'a BTreeMap<u32, CoreResultInfo>,
-    core_load_history: &'a BTreeMap<u32, VecDeque<f32>>,
+    core_load_smoothed: &'a BTreeMap<u32, f32>,
 ) -> Element<'a, Message> {
     let text_primary = if is_dark {
         gui_theme::DARK_TEXT_PRIMARY
@@ -741,7 +741,7 @@ pub fn topology_grid_view<'a>(
                 is_dark,
                 greyed_out,
                 amd_generation,
-                load_history: core_load_history.get(core_id),
+                load_smoothed: core_load_smoothed.get(core_id).copied(),
             };
 
             grid = grid.push(core_tile_view(&tile_data));
@@ -937,8 +937,15 @@ pub fn config_panel_view<'a>(
     let action_button: Element<'a, Message> = if test_running {
         button(text("\u{25a0} Stop Test").size(14))
             .on_press(Message::StopTest)
-            .style(|_theme, _status| button::Style {
-                background: Some(iced::Color::from_rgb(0.6, 0.15, 0.15).into()),
+            .style(move |_theme, _status| button::Style {
+                background: Some(
+                    if is_dark {
+                        iced::Color::from_rgb(0.6, 0.15, 0.15)
+                    } else {
+                        iced::Color::from_rgb(0.75, 0.2, 0.2)
+                    }
+                    .into(),
+                ),
                 text_color: iced::Color::WHITE,
                 border: iced::Border {
                     radius: 4.0.into(),
@@ -950,8 +957,15 @@ pub fn config_panel_view<'a>(
     } else {
         button(text("\u{25b6} Start Test").size(14))
             .on_press(Message::StartTest)
-            .style(|_theme, _status| button::Style {
-                background: Some(iced::Color::from_rgb(0.18, 0.35, 0.15).into()),
+            .style(move |_theme, _status| button::Style {
+                background: Some(
+                    if is_dark {
+                        iced::Color::from_rgb(0.18, 0.35, 0.15)
+                    } else {
+                        iced::Color::from_rgb(0.2, 0.45, 0.18)
+                    }
+                    .into(),
+                ),
                 text_color: iced::Color::WHITE,
                 border: iced::Border {
                     radius: 4.0.into(),

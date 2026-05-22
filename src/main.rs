@@ -493,6 +493,8 @@ fn print_startup_banner(
     if !args.quiet {
         println!("core-probe");
         println!("CPU: {}", topology.model_name);
+        let generation = co_tier::detect_generation(&topology.model_name);
+        println!("Generation: {generation}");
         println!("{}", format_uefi_status_line(uefi_settings));
         for co_line in format_co_offsets_lines(uefi_settings) {
             println!("{co_line}");

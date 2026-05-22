@@ -189,3 +189,8 @@ Recommendation: mprime is the proven standard for CPU stability detection. Alter
 
 **`build_modal_content` topology fallback:** Signature is `topology: Option<&CpuTopology>`. When `None`, physical core IDs are used as `bios_index` and `" (physical ID)"` is appended to `error_summary`. MCE-only failures use `build_error_summary()` helper (not `format_error_summary`) to show real MCE type labels.
 
+
+<!-- SPECKIT START -->
+For additional context about technologies to be used, project structure,
+shell commands, and other important information, read the current plan
+<!-- SPECKIT END -->

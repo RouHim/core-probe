@@ -119,6 +119,7 @@ pub struct CoreProbeApp {
     pub core_progress: BTreeMap<u32, PerCoreProgress>,
     pub core_results: BTreeMap<u32, CoreResultInfo>,
     pub core_load_history: BTreeMap<u32, VecDeque<f32>>,
+    pub core_load_smoothed: BTreeMap<u32, f32>,
     pub log_entries: Vec<LogEntry>,
     pub theme_mode: ThemeMode,
     pub config: TestConfig,
@@ -177,6 +178,7 @@ pub fn boot() -> (CoreProbeApp, Task<Message>) {
         core_progress: BTreeMap::new(),
         core_results: BTreeMap::new(),
         core_load_history: BTreeMap::new(),
+        core_load_smoothed: BTreeMap::new(),
         log_entries: Vec::new(),
         theme_mode: ThemeMode::Dark,
         config: TestConfig::default(),
@@ -331,6 +333,13 @@ pub fn update(state: &mut CoreProbeApp, message: Message) -> Task<Message> {
                 state.event_receiver = None;
                 state.test_running = false;
             }
+
+            for (&phys_id, history) in &state.core_load_history {
+                if let Some(&latest) = history.back() {
+                    let smoothed = state.core_load_smoothed.entry(phys_id).or_insert(latest);
+                    *smoothed += (latest - *smoothed) * 0.2;
+                }
+            }
         }
         Message::DismissError => {
             state.error_banner = None;
@@ -378,7 +387,7 @@ pub fn view(state: &CoreProbeApp) -> Element<'_, Message> {
             &None,
             &state.core_progress,
             &state.core_results,
-            &state.core_load_history,
+            &state.core_load_smoothed,
         )
     } else {
         container(text("CPU topology unavailable"))
@@ -434,8 +443,15 @@ pub fn view(state: &CoreProbeApp) -> Element<'_, Message> {
             .spacing(8),
         )
         .padding(8)
-        .style(|_theme: &Theme| iced::widget::container::Style {
-            background: Some(iced::Color::from_rgb(0.45, 0.12, 0.12).into()),
+        .style(move |_theme: &Theme| iced::widget::container::Style {
+            background: Some(
+                if is_dark {
+                    iced::Color::from_rgb(0.45, 0.12, 0.12)
+                } else {
+                    iced::Color::from_rgb(0.9, 0.25, 0.25)
+                }
+                .into(),
+            ),
             text_color: Some(iced::Color::WHITE),
             ..Default::default()
         });
@@ -492,7 +508,7 @@ pub fn subscription(state: &CoreProbeApp) -> Subscription<Message> {
     };
 
     Subscription::batch([
-        iced::time::every(Duration::from_millis(100)).map(|_| Message::Tick),
+        iced::time::every(Duration::from_millis(16)).map(|_| Message::Tick),
         keyboard_subscription,
     ])
 }
@@ -963,6 +979,7 @@ mod tests {
             core_progress: BTreeMap::new(),
             core_results: BTreeMap::new(),
             core_load_history: BTreeMap::new(),
+            core_load_smoothed: BTreeMap::new(),
             log_entries: Vec::new(),
             theme_mode: ThemeMode::Dark,
             config: TestConfig::default(),

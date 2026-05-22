@@ -177,8 +177,15 @@ fn build_result_card<'a>(content: &ModalContent, is_dark: bool) -> Element<'a, M
     let reboot_btn: Element<'a, Message> = button(text("Reboot to BIOS").size(14))
         .on_press(Message::RebootToFirmware)
         .padding(iced::Padding::from([6, 16]))
-        .style(|_theme, _status| button::Style {
-            background: Some(iced::Color::from_rgb(0.18, 0.35, 0.15).into()),
+        .style(move |_theme, _status| button::Style {
+            background: Some(
+                if is_dark {
+                    iced::Color::from_rgb(0.18, 0.35, 0.15)
+                } else {
+                    iced::Color::from_rgb(0.2, 0.45, 0.18)
+                }
+                .into(),
+            ),
             text_color: iced::Color::WHITE,
             border: iced::Border {
                 radius: 4.0.into(),

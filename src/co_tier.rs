@@ -3,7 +3,20 @@ pub enum AmdGeneration {
     Zen3,
     Zen4,
     Zen5,
+    Zen6,
     Unknown,
+}
+
+impl std::fmt::Display for AmdGeneration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Zen3 => write!(f, "Zen 3"),
+            Self::Zen4 => write!(f, "Zen 4"),
+            Self::Zen5 => write!(f, "Zen 5"),
+            Self::Zen6 => write!(f, "Zen 6"),
+            Self::Unknown => write!(f, "Unknown"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +44,13 @@ pub fn detect_generation(model_name: &str) -> AmdGeneration {
         return AmdGeneration::Zen5;
     }
 
+    // TODO: Add Zen 6 detection when AMD confirms desktop naming.
+    // Expected pattern: Ryzen 1xxxx series (e.g., "AMD Ryzen 9 11950X").
+    // Example: if contains_series(model_name, '1') { return AmdGeneration::Zen6; }
+    //
+    // Note: The '1' check must handle the Ryzen 1xxx (Zen 1) ambiguity.
+    // Zen 1 used four-digit model numbers (e.g., 1800X); Zen 6 is expected
+    // to use five-digit numbers (e.g., 10950X or 11950X).
     AmdGeneration::Unknown
 }
 
@@ -39,6 +59,7 @@ pub fn classify_co(co_value: i32, generation: AmdGeneration) -> CoTier {
         AmdGeneration::Zen3 => classify_by_thresholds(co_value, -25, -15, -5),
         AmdGeneration::Zen4 => classify_by_thresholds(co_value, -28, -18, -8),
         AmdGeneration::Zen5 => classify_by_thresholds(co_value, -30, -20, -10),
+        AmdGeneration::Zen6 => classify_by_thresholds(co_value, -32, -22, -12),
         AmdGeneration::Unknown => CoTier::Neutral,
     }
 }
@@ -285,5 +306,56 @@ mod tests {
         let result = classify_co(-50, AmdGeneration::Zen3);
 
         assert_eq!(result, CoTier::Gold);
+    }
+
+    #[test]
+    fn given_zen6_and_minus_32_when_classifying_then_returns_gold() {
+        let result = classify_co(-32, AmdGeneration::Zen6);
+
+        assert_eq!(result, CoTier::Gold);
+    }
+
+    #[test]
+    fn given_zen6_and_minus_31_when_classifying_then_returns_silver() {
+        let result = classify_co(-31, AmdGeneration::Zen6);
+
+        assert_eq!(result, CoTier::Silver);
+    }
+
+    #[test]
+    fn given_zen6_and_minus_22_when_classifying_then_returns_silver() {
+        let result = classify_co(-22, AmdGeneration::Zen6);
+
+        assert_eq!(result, CoTier::Silver);
+    }
+
+    #[test]
+    fn given_zen6_and_minus_21_when_classifying_then_returns_bronze() {
+        let result = classify_co(-21, AmdGeneration::Zen6);
+
+        assert_eq!(result, CoTier::Bronze);
+    }
+
+    #[test]
+    fn given_zen6_and_minus_12_when_classifying_then_returns_bronze() {
+        let result = classify_co(-12, AmdGeneration::Zen6);
+
+        assert_eq!(result, CoTier::Bronze);
+    }
+
+    #[test]
+    fn given_zen6_and_minus_11_when_classifying_then_returns_neutral() {
+        let result = classify_co(-11, AmdGeneration::Zen6);
+
+        assert_eq!(result, CoTier::Neutral);
+    }
+
+    #[test]
+    fn test_display_zen3_through_zen6_and_unknown() {
+        assert_eq!(AmdGeneration::Zen3.to_string(), "Zen 3");
+        assert_eq!(AmdGeneration::Zen4.to_string(), "Zen 4");
+        assert_eq!(AmdGeneration::Zen5.to_string(), "Zen 5");
+        assert_eq!(AmdGeneration::Zen6.to_string(), "Zen 6");
+        assert_eq!(AmdGeneration::Unknown.to_string(), "Unknown");
     }
 }
