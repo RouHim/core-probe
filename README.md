@@ -67,65 +67,40 @@ sudo install -m755 core-probe /usr/local/bin/core-probe
 
 ```bash
 # Source build
-paru -S core-probe
+yay -S core-probe
 
 # Pre-built binary
-paru -S core-probe-bin
+yay -S core-probe-bin
 ```
-
-## Building from source
-
-```bash
-git clone https://github.com/RouHim/core-probe.git
-cd core-probe
-cargo build --release
-```
-
-The binary ends up at `target/release/core-probe`.
 
 ## Usage
 
-Just run it:
+### GUI (desktop mode)
+
+Just run `core-probe` with no arguments — it launches a graphical desktop application:
 
 ```bash
-./core-probe
+core-probe
 ```
 
-By default it tests every core for 6 minutes each, repeating 3 full cycles, using SSE workloads. That's usually enough to catch instability.
+The GUI gives you a live dashboard with per-core progress, real-time CPU load graphs, pass/fail results per core, and a detailed report when testing completes. You can configure test duration, iterations, stress mode (SSE/AVX/AVX2), and select specific cores — all from the interface, no command-line flags needed.
 
-### Common scenarios
+### CLI (terminal mode)
+
+For scripting, automation, or headless systems, core-probe also provides a command-line interface. Run `core-probe --help` to see all available flags:
 
 ```bash
-# Only test specific cores (by BIOS number)
-./core-probe --cores 6,7,8
+# Test specific cores with AVX2, 1 minute each
+core-probe -c 6,7,8 -m avx2 -d 1m
 
-# Quick scan: 1 minute per core, 1 cycle, stop on first failure
-./core-probe -d 1m -i 1 --bail
+# Quick scan: stop on first failure
+core-probe -d 1m -i 1 --bail
 
-# Heavier workload using AVX2
-./core-probe -m avx2
-
-# Machine-readable output only (for scripting)
-./core-probe -q
+# Machine-readable output only
+core-probe -q
 ```
 
-### All options
-
-| Flag | What it does | Default |
-|------|-------------|---------|
-| `-d, --duration` | How long to test each core | 6 minutes |
-| `-i, --iterations` | How many full cycles through all cores | 3 |
-| `-c, --cores` | Only test these cores (comma-separated BIOS numbers) | all |
-| `-m, --mode` | Stress test type: `sse`, `avx`, or `avx2` | `sse` |
-| `-b, --bail` | Stop immediately when any core fails | off |
-| `-q, --quiet` | Only print the machine-readable result line | off |
-| `--benchmark` | Run an FFT benchmark instead of stability test | — |
-
-### Stress test modes
-
-- **SSE** — Standard workload. Works on every modern AMD chip. Start here.
-- **AVX** — Heavier. Draws more power, generates more heat, finds more issues.
-- **AVX2** — Heaviest. If a core passes AVX2, it's solid.
+Key flags: `-d`/`--duration`, `-i`/`--iterations`, `-c`/`--cores`, `-m`/`--mode` (sse/avx/avx2), `-b`/`--bail`, `-q`/`--quiet`. See `--help` for the full list.
 
 ## Output
 
@@ -147,59 +122,6 @@ All core numbers are always BIOS indices — the same numbers you see in your Cu
 
 If core-probe reports a core as unstable, reduce that core's Curve Optimizer offset in BIOS. For example, if Core 6 fails, go to your BIOS CO settings, find Core 6, and reduce the negative offset (e.g., from -30 to -20). Then re-run core-probe to verify.
 
-## Adding support for new AGESA versions
+## Contributing
 
-core-probe can read Curve Optimizer settings directly from your UEFI firmware variables. This works by knowing where CO data is stored inside the AMD Overclocking (AOD) UEFI variable — but the exact byte layout depends on your BIOS's AGESA version.
-
-Currently supported AGESA versions are defined in `src/co_offsets.rs`. If your AGESA version isn't listed, core-probe falls back to a heuristic scanner that tries to find CO patterns automatically. You can add explicit support for your version:
-
-### How CO data is stored
-
-The AOD UEFI variable (GUID `5ed15dc0-edef-4161-9151-6014c4cc630c`) contains a binary blob with CO settings at fixed offsets. The layout is described by `CoByteLayout`:
-
-```rust
-pub struct CoByteLayout {
-    pub mode_offset: usize,        // CO mode: 0=Disabled, 1=AllCore, 2=PerCore
-    pub signs_offset: usize,       // One u8 per core: 0=positive, 1=negative
-    pub magnitudes_offset: usize,  // One u16 LE per core: magnitude value (0-30)
-    pub max_cores: usize,          // Maximum cores this layout supports
-}
-```
-
-Between the mode byte and the signs region there's typically a 4-byte gap. Between signs and magnitudes there's usually a 0x40-byte gap, though this can vary by AGESA version.
-
-### Adding a new layout
-
-1. **Find your AGESA version** — check your BIOS settings or run `dmidecode -t bios` and look for the AGESA string.
-
-2. **Dump the AOD variable** — read the raw bytes from `/sys/firmware/efi/efivars/` using the AOD GUID above. You'll need root access.
-
-3. **Locate the offsets** — set known CO values in BIOS (e.g., PerCore mode, Core 0 = -15), dump the variable, and search for the corresponding byte patterns:
-   - Mode byte: `0x02` for PerCore
-   - Signs: `0x01` for negative
-   - Magnitudes: `0x0F 0x00` for value 15 (u16 LE)
-
-4. **Add the entry** in `src/co_offsets.rs`:
-
-```rust
-let known_layouts: &[(_, CoByteLayout)] = &[
-    // existing entries...
-    (
-        "1.2.0.7",  // your AGESA version substring
-        CoByteLayout {
-            mode_offset: 0x174,
-            signs_offset: 0x178,
-            magnitudes_offset: 0x1B8,
-            max_cores: 16,
-        },
-    ),
-];
-```
-
-The version string is matched with `contains()`, so `"1.2.0.7"` matches both `"1.2.0.7"` and `"AGESA V2 PI 1.2.0.7 Patch C"`.
-
-### Heuristic fallback
-
-When no known layout matches, `src/co_heuristic.rs` scans the entire AOD blob for CO-like patterns. It looks for mode bytes (0x01 or 0x02) followed by valid sign regions (all bytes 0x00 or 0x01) and plausible magnitude regions (all u16 LE values ≤ 30 with at least half non-zero). Candidates are ranked by confidence (High/Medium/Low) and proximity to the data's center.
-
-The heuristic works well for standard layouts but adding an explicit entry is more reliable if you've confirmed the offsets.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for build instructions, development setup, and guidance on adding support for new AGESA versions.
