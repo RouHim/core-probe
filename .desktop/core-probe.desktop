@@ -2,6 +2,7 @@
 Type=Application
 Name=core-probe
 Comment=Identify unstable AMD CPU cores using mprime stress testing
+Icon=core-probe
 Exec=core-probe
 Terminal=false
 Categories=System;Utility;
