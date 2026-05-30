@@ -1,0 +1,204 @@
+name: pipe
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check-repo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: 1
+
+  check-code-style:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: core-probe-cache
+      - name: Check formatting
+        run: cargo fmt -- --check
+
+  check-code:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: core-probe-cache
+      - name: Run clippy
+        run: cargo clippy -- -D warnings
+
+  check-unused-dependencies:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: core-probe-cache
+      - name: Install cargo-udeps
+        run: cargo install cargo-udeps --locked
+      - name: Check unused dependencies
+        run: cargo +nightly udeps
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: core-probe-cache
+      - name: Run tests
+        run: cargo test
+
+  build-feature:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: core-probe-cache
+      - name: Build
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+
+  create-release:
+    if: github.ref == 'refs/heads/main'
+    needs:
+      - check-repo
+      - check-code-style
+      - check-code
+      - test
+    runs-on: ubuntu-latest
+    outputs:
+      released: ${{ steps.release.outputs.released }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.RELEASE_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - name: Install semantic-release
+        run: npm install -g semantic-release @semantic-release/exec @semantic-release/git @semantic-release/changelog @semantic-release/github conventional-changelog-conventionalcommits
+      - name: Create release
+        id: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: npx semantic-release
+
+  build:
+    needs: create-release
+    if: needs.create-release.result == 'success' && needs.create-release.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.create-release.outputs.version }}
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: core-probe-cache
+      - name: Build release binary
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+      - name: Package artifacts
+        run: |
+          mkdir -p release
+          cp target/x86_64-unknown-linux-gnu/release/core-probe release/
+          cp PKGBUILD.bin release/
+          cp .desktop/core-probe.desktop release/
+          tar -czf core-probe-${{ needs.create-release.outputs.version }}-x86_64-linux.tar.gz -C release .
+      - name: Upload to release
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          gh release upload ${{ needs.create-release.outputs.version }} \
+            core-probe-${{ needs.create-release.outputs.version }}-x86_64-linux.tar.gz
+
+  publish-aur:
+    needs: create-release
+    if: needs.create-release.result == 'success' && needs.create-release.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.create-release.outputs.version }}
+      - name: Setup SSH for AUR
+        uses: shimataro/ssh-key-action@v2
+        with:
+          key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          known_hosts: ${{ secrets.SSH_KNOWN_HOSTS }}
+      - name: Update PKGBUILD version
+        run: |
+          sed -i "s/pkgver=.*/pkgver=${{ needs.create-release.outputs.version }}/" PKGBUILD
+          sed -i "s/pkgrel=.*/pkgrel=1/" PKGBUILD
+      - name: Publish to AUR (source)
+        run: |
+          git clone ssh://aur@aur.archlinux.org/core-probe.git aur-core-probe
+          cp PKGBUILD aur-core-probe/
+          cd aur-core-probe
+          makepkg --printsrcinfo > .SRCINFO
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add PKGBUILD .SRCINFO
+          git commit -m "chore: release ${{ needs.create-release.outputs.version }}"
+          git push
+
+  publish-aur-bin:
+    needs: build
+    if: needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.create-release.outputs.version }}
+      - name: Setup SSH for AUR
+        uses: shimataro/ssh-key-action@v2
+        with:
+          key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          known_hosts: ${{ secrets.SSH_KNOWN_HOSTS }}
+      - name: Update PKGBUILD.bin version and checksums
+        run: |
+          ARCHIVE="core-probe-${{ needs.create-release.outputs.version }}-x86_64-linux.tar.gz"
+          URL="https://github.com/${{ github.repository }}/releases/download/${{ needs.create-release.outputs.version }}/${ARCHIVE}"
+          SHA256=$(curl -sL "$URL" | sha256sum | cut -d' ' -f1)
+          sed -i "s/pkgver=.*/pkgver=${{ needs.create-release.outputs.version }}/" PKGBUILD.bin
+          sed -i "s/pkgrel=.*/pkgrel=1/" PKGBUILD.bin
+          sed -i "s/sha256sums=('.*')/sha256sums=('${SHA256}')/" PKGBUILD.bin
+      - name: Publish to AUR (bin)
+        run: |
+          git clone ssh://aur@aur.archlinux.org/core-probe-bin.git aur-core-probe-bin
+          cp PKGBUILD.bin aur-core-probe-bin/PKGBUILD
+          cd aur-core-probe-bin
+          makepkg --printsrcinfo > .SRCINFO
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add PKGBUILD .SRCINFO
+          git commit -m "chore: release ${{ needs.create-release.outputs.version }}"
+          git push

@@ -1,5 +1,16 @@
 # core-probe
 
+```
+  ┌─┐┌─┐┬─┐┌─┐   ┌─┐┬─┐┌─┐┌┐ ┌─┐
+  │  │ │├┬┘├┤ ─── ├─┘├┬┘│ │├┴┐├┤ 
+  └─┘└─┘┴└─└─┘   ┴  ┴└─└─┘└─┘└─┘
+```
+
+[![Release](https://img.shields.io/github/v/release/RouHim/core-probe?label=release)](https://github.com/RouHim/core-probe/releases)
+[![Release Date](https://img.shields.io/github/release-date/RouHim/core-probe)](https://github.com/RouHim/core-probe/releases)
+[![CI](https://img.shields.io/github/actions/workflow/status/RouHim/core-probe/pipe.yaml?branch=main&label=ci)](https://github.com/RouHim/core-probe/actions)
+[![License](https://img.shields.io/github/license/RouHim/core-probe)](LICENSE)
+
 A Linux tool that finds unstable CPU cores on AMD systems. Built for anyone tuning per-core Curve Optimizer (CO) values in BIOS — it tells you exactly which cores are failing so you know where to back off.
 
 It uses mprime (Prime95) under the hood, the same stress test trusted by overclockers for decades. mprime is bundled inside the binary, so there's nothing extra to download.
@@ -39,9 +50,33 @@ Here's what the mapping looks like on a 5900X:
 - AMD CPU (the tool checks this and stops if it detects something else)
 - Root is only needed if you want to read UEFI/BIOS settings directly (`--uefi-only`)
 
-## Build
+## Installation
+
+### Pre-built binary
+
+Grab the latest binary from the [releases page](https://github.com/RouHim/core-probe/releases):
 
 ```bash
+curl -L -o core-probe.tar.gz https://github.com/RouHim/core-probe/releases/latest/download/core-probe-x86_64-linux.tar.gz
+tar xzf core-probe.tar.gz
+sudo install -m755 core-probe /usr/local/bin/core-probe
+```
+
+### AUR (Arch Linux)
+
+```bash
+# Source build
+paru -S core-probe
+
+# Pre-built binary
+paru -S core-probe-bin
+```
+
+## Building from source
+
+```bash
+git clone https://github.com/RouHim/core-probe.git
+cd core-probe
 cargo build --release
 ```
 

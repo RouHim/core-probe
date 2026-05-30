@@ -6,3 +6,5 @@ mprime-latest/
 replace.py
 replace.sh
 replace_idle.py
+.secrets
+*.tar.gz

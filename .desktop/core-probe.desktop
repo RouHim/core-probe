@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=core-probe
+Comment=Identify unstable AMD CPU cores using mprime stress testing
+Exec=core-probe
+Terminal=false
+Categories=System;Utility;
+Keywords=CPU;stability;AMD;overclock;Curve Optimizer;

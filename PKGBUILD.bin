@@ -1,0 +1,16 @@
+# Maintainer: RouHim <rouhim@users.noreply.github.com>
+
+pkgname=core-probe-bin
+pkgver=0.0.0
+pkgrel=1
+pkgdesc="A Linux CLI tool to identify unstable AMD CPU cores using mprime stress testing (pre-built binary)"
+arch=('x86_64')
+url="https://github.com/RouHim/core-probe"
+license=('MIT')
+source=("${pkgname}-${pkgver}.tar.gz::${url}/releases/download/${pkgver}/core-probe-${pkgver}-x86_64-linux.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+  install -Dm755 core-probe "${pkgdir}/usr/bin/core-probe"
+  install -Dm644 core-probe.desktop "${pkgdir}/usr/share/applications/core-probe.desktop"
+}
