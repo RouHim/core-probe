@@ -8,7 +8,7 @@ use crate::gui_events::LogLevel;
 // ThemeMode
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ThemeMode {
     Light,
     Dark,

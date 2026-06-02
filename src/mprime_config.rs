@@ -8,7 +8,7 @@ use tracing::{debug, instrument};
 /// - AVX/AVX2: Higher power draw, lower boost clocks
 /// - AVX512: Highest power draw, lowest boost clocks
 /// - Custom: Manual override of CPU feature flags
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum StressTestMode {
     /// SSE/SSE2 only (disables AVX/AVX2/AVX512) - default for instability detection
     #[default]

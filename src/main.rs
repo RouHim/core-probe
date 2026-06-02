@@ -4,6 +4,7 @@ pub mod co_heuristic;
 pub mod co_offsets;
 pub mod co_reader;
 pub mod co_tier;
+pub mod config_persistence;
 pub mod coordinator;
 pub mod cpu_load_poller;
 pub mod cpu_topology;

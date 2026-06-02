@@ -32,7 +32,7 @@ pub struct LogEntry {
     pub message: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TestConfig {
     pub duration: String,
     pub iterations: u32,
@@ -170,6 +170,8 @@ pub fn boot() -> (CoreProbeApp, Task<Message>) {
             None
         }
     };
+    let (loaded_config, loaded_theme) = crate::config_persistence::load()
+        .unwrap_or_else(|| (TestConfig::default(), ThemeMode::Dark));
 
     let mut app = CoreProbeApp {
         topology,
@@ -180,8 +182,8 @@ pub fn boot() -> (CoreProbeApp, Task<Message>) {
         core_load_history: BTreeMap::new(),
         core_load_smoothed: BTreeMap::new(),
         log_entries: Vec::new(),
-        theme_mode: ThemeMode::Dark,
-        config: TestConfig::default(),
+        theme_mode: loaded_theme,
+        config: loaded_config,
         test_running: false,
         progress: TestProgress::default(),
         error_banner,
@@ -298,13 +300,17 @@ pub fn update(state: &mut CoreProbeApp, message: Message) -> Task<Message> {
             } else {
                 ThemeMode::Dark
             };
+            crate::config_persistence::save(&state.config, state.theme_mode);
         }
-        Message::ConfigChanged(field) => match field {
-            ConfigField::Duration(d) => state.config.duration = d,
-            ConfigField::Iterations(n) => state.config.iterations = n,
-            ConfigField::Mode(m) => state.config.mode = m,
-            ConfigField::Cores(c) => state.config.cores = c,
-        },
+        Message::ConfigChanged(field) => {
+            match field {
+                ConfigField::Duration(d) => state.config.duration = d,
+                ConfigField::Iterations(n) => state.config.iterations = n,
+                ConfigField::Mode(m) => state.config.mode = m,
+                ConfigField::Cores(c) => state.config.cores = c,
+            }
+            crate::config_persistence::save(&state.config, state.theme_mode);
+        }
         Message::EventReceived(event) => {
             process_event(state, event);
         }
