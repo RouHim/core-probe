@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use iced::widget::grid;
 use iced::widget::tooltip::Position as TooltipPosition;
@@ -321,6 +321,14 @@ pub struct CoreTileData<'a> {
     pub greyed_out: bool,
     pub amd_generation: crate::co_tier::AmdGeneration,
     pub load_smoothed: Option<f32>,
+    /// Package temperature (°C) for the core currently being tested.
+    pub tctl: Option<f32>,
+    /// Current frequency in MHz for the core currently being tested.
+    pub freq_mhz: Option<u32>,
+    /// Maximum boost frequency in MHz.
+    pub freq_max_mhz: Option<u32>,
+    /// True when this core is paused for thermal cooldown.
+    pub is_thermal_throttled: bool,
 }
 
 fn format_time_mm_ss(secs: u64) -> String {
@@ -362,11 +370,13 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
             CoreStatus::Interrupted => ("\u{26a0}", "INTERRUPTED"),
         };
 
-        let mut top_row = row![
-            text(format!("Core {}", data.bios_index)).size(22).color(fg),
-            Space::new().width(Length::Fill)
-        ]
-        .align_y(iced::Alignment::Center);
+        let core_label_text = text(format!("Core {}", data.bios_index)).size(22).color(fg);
+        let phys_tip = text(format!("Physical core ID: {}", data.physical_core_id)).size(12);
+        let core_label = tooltip(core_label_text, phys_tip, TooltipPosition::Top)
+            .gap(4)
+            .style(|_theme: &iced::Theme| container::Style::default());
+        let mut top_row =
+            row![core_label, Space::new().width(Length::Fill)].align_y(iced::Alignment::Center);
         if let Some(offset) = data.co_offset {
             let badge = co_badge(
                 format!("CO: {offset}"),
@@ -385,10 +395,6 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
             top_row = top_row.push(badge);
         }
 
-        let phys_label = text(format!("Core ID {}", data.physical_core_id))
-            .size(11)
-            .color(secondary_color);
-
         let status_row: Element<'a, Message> = if *data.status == CoreStatus::Idle {
             Space::new().height(Length::Fixed(20.0)).into()
         } else {
@@ -405,7 +411,7 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
             .into()
         };
 
-        let mut col = column![top_row, phys_label].spacing(4);
+        let mut col = column![top_row].spacing(4);
 
         let progress_section: Element<'a, Message> =
             column![Space::new().height(Length::Fixed(6.0)), text(" ").size(12)]
@@ -511,14 +517,20 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
     let amd_generation = data.amd_generation;
     let status = data.status.clone();
     let load_smoothed = data.load_smoothed;
+    let tctl = data.tctl;
+    let _freq_mhz = data.freq_mhz;
+    let freq_max_mhz = data.freq_max_mhz;
+    let is_thermal_throttled = data.is_thermal_throttled;
     AnimationBuilder::new(
         ((bg, fg, border_color, secondary_color), ratio),
         move |((bg, fg, border_color, secondary_color), ratio)| {
-            let mut top_row = row![
-                text(format!("Core {}", bios_index)).size(22).color(fg),
-                Space::new().width(Length::Fill)
-            ]
-            .align_y(iced::Alignment::Center);
+            let core_label_text = text(format!("Core {}", bios_index)).size(22).color(fg);
+            let phys_tip = text(format!("Physical core ID: {}", physical_core_id)).size(12);
+            let core_label = tooltip(core_label_text, phys_tip, TooltipPosition::Top)
+                .gap(4)
+                .style(|_theme: &iced::Theme| container::Style::default());
+            let mut top_row = row![core_label, Space::new().width(Length::Fill),]
+                .align_y(iced::Alignment::Center);
             if let Some(offset) = co_offset {
                 let tier = crate::co_tier::classify_co(offset, amd_generation);
                 let badge = co_badge(
@@ -529,10 +541,6 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
                 );
                 top_row = top_row.push(badge);
             }
-
-            let phys_label = text(format!("Core ID {}", physical_core_id))
-                .size(11)
-                .color(secondary_color);
 
             let status_row: Element<'_, Message> = if status == CoreStatus::Idle {
                 Space::new().height(Length::Fixed(20.0)).into()
@@ -550,7 +558,7 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
                 .into()
             };
 
-            let mut col = column![top_row, phys_label].spacing(4);
+            let mut col = column![top_row].spacing(4);
 
             let progress_section: Element<'_, Message> = if status == CoreStatus::Testing {
                 if !time_str.is_empty() {
@@ -572,7 +580,70 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
             };
             col = col.push(progress_section);
 
-            col = col.push(status_row);
+            // Show cooldown status or normal status.
+            let effective_status_row: Element<'_, Message> =
+                if status == CoreStatus::Testing && is_thermal_throttled {
+                    container(
+                        row![
+                            text("\u{23F8}").size(18).color(fg),
+                            text("PAUSED (cooling)").size(13).color(fg)
+                        ]
+                        .spacing(6)
+                        .align_y(iced::Alignment::Center),
+                    )
+                    .width(Length::Fill)
+                    .center_x(Length::Fill)
+                    .into()
+                } else {
+                    status_row
+                };
+            col = col.push(effective_status_row);
+
+            // Thermal info row: always show temp + frequency.
+            let tctl_is_some = tctl.is_some();
+            let temp_str = if let Some(t) = tctl {
+                let temp_color = if t >= 80.0 {
+                    iced::Color::from_rgb(1.0, 0.3, 0.3) // red
+                } else if t >= 70.0 {
+                    iced::Color::from_rgb(1.0, 0.6, 0.2) // orange
+                } else {
+                    secondary_color
+                };
+                (format!("{:.0}\u{b0}C", t), temp_color)
+            } else {
+                (String::from("---\u{b0}C"), secondary_color)
+            };
+
+            let freq_val = if let Some(mhz) = freq_max_mhz {
+                format!("{} MHz", mhz)
+            } else {
+                String::from("--- MHz")
+            };
+
+            let freq_tooltip = if tctl_is_some {
+                text("Max frequency reached during test").size(12)
+            } else {
+                text("No thermal data available").size(12)
+            };
+
+            let freq_display = tooltip(
+                text(freq_val).size(12).color(secondary_color),
+                freq_tooltip,
+                TooltipPosition::Top,
+            )
+            .gap(4)
+            .style(|_theme: &iced::Theme| container::Style::default());
+
+            let thermal_row = row![
+                text(temp_str.0)
+                    .size(12)
+                    .color(temp_str.1),
+                Space::new().width(Length::Fill),
+                freq_display,
+            ]
+            .align_y(iced::Alignment::Center);
+
+            col = col.push(thermal_row);
 
             let sparkline_element: Element<'_, Message> = if let Some(load) = load_smoothed {
                 sparkline_view(load, is_dark)
@@ -684,6 +755,10 @@ pub fn topology_grid_view<'a>(
     core_progress: &'a BTreeMap<u32, PerCoreProgress>,
     core_results: &'a BTreeMap<u32, CoreResultInfo>,
     core_load_smoothed: &'a BTreeMap<u32, f32>,
+    core_temperatures: &'a BTreeMap<u32, f32>,
+    core_frequencies: &'a BTreeMap<u32, u64>,
+    thermal_throttled_cores: &'a BTreeSet<u32>,
+    core_freq_max: &'a BTreeMap<u32, u64>,
 ) -> Element<'a, Message> {
     let text_primary = if is_dark {
         gui_theme::DARK_TEXT_PRIMARY
@@ -742,6 +817,10 @@ pub fn topology_grid_view<'a>(
                 greyed_out,
                 amd_generation,
                 load_smoothed: core_load_smoothed.get(core_id).copied(),
+                tctl: core_temperatures.get(core_id).copied(),
+                freq_mhz: core_frequencies.get(core_id).map(|khz| (khz / 1000) as u32),
+                freq_max_mhz: core_freq_max.get(core_id).map(|khz| (*khz / 1000) as u32),
+                is_thermal_throttled: thermal_throttled_cores.contains(core_id),
             };
 
             grid = grid.push(core_tile_view(&tile_data));
@@ -781,19 +860,23 @@ pub fn topology_grid_view<'a>(
         gui_theme::LIGHT_CARD_BORDER
     };
 
-    container(main_col)
-        .width(Length::FillPortion(3))
-        .padding(Padding::from(8))
-        .style(move |_theme: &iced::Theme| container::Style {
-            background: Some(bg_secondary.into()),
-            border: iced::Border {
-                radius: 4.0.into(),
-                width: 1.0,
-                color: topo_border,
-            },
-            ..Default::default()
-        })
-        .into()
+    container(
+        scrollable(main_col)
+            .width(Length::Fill)
+            .height(Length::Fill),
+    )
+    .width(Length::FillPortion(3))
+    .padding(Padding::from(8))
+    .style(move |_theme: &iced::Theme| container::Style {
+        background: Some(bg_secondary.into()),
+        border: iced::Border {
+            radius: 4.0.into(),
+            width: 1.0,
+            color: topo_border,
+        },
+        ..Default::default()
+    })
+    .into()
 }
 
 // ---------------------------------------------------------------------------

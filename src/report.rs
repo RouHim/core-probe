@@ -51,6 +51,12 @@ struct AggregatedCoreResult {
     all_mce_errors: Vec<MceError>,
     #[allow(dead_code)]
     total_iterations: u32,
+    /// Average frequency observed across all iterations, in kHz.
+    avg_freq_khz: Option<u64>,
+    /// Maximum boost frequency, in kHz.
+    freq_max_khz: Option<u64>,
+    /// Total thermal cooldown pauses across all iterations.
+    total_cooldowns: u32,
 }
 
 impl<'a> StabilityReport<'a> {
@@ -349,6 +355,47 @@ impl<'a> StabilityReport<'a> {
             output.push_str(&" ".repeat(padding));
             output.push_str(BOX_VERTICAL);
             output.push('\n');
+            output.push_str(&" ".repeat(padding));
+            output.push_str(BOX_VERTICAL);
+            output.push('\n');
+        }
+
+        // Boost quality line
+        if let Some(avg_khz) = result.avg_freq_khz {
+            let avg_mhz = avg_khz as f64 / 1000.0;
+            let boost_pct = if let Some(max_khz) = result.freq_max_khz {
+                if max_khz > 0 {
+                    format!(" ({:.0}% boost)", (avg_khz as f64 / max_khz as f64) * 100.0)
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
+            let freq_line = format!(
+                "{}   \u{1F4E1} Avg: {:.2} GHz{}",
+                BOX_VERTICAL, avg_mhz, boost_pct
+            );
+            let vis = visible_len(&freq_line);
+            let padding = 65_usize.saturating_sub(vis);
+            output.push_str(&freq_line);
+            output.push_str(&" ".repeat(padding));
+            output.push_str(BOX_VERTICAL);
+            output.push('\n');
+        }
+
+        // Cooldown pauses line
+        if result.total_cooldowns > 0 {
+            let cooldown_line = format!(
+                "{}   \u{23F8} Cooldown pauses: {}",
+                BOX_VERTICAL, result.total_cooldowns
+            );
+            let vis = visible_len(&cooldown_line);
+            let padding = 65_usize.saturating_sub(vis);
+            output.push_str(&cooldown_line);
+            output.push_str(&" ".repeat(padding));
+            output.push_str(BOX_VERTICAL);
+            output.push('\n');
         }
 
         output
@@ -459,12 +506,28 @@ impl<'a> StabilityReport<'a> {
                     .iter()
                     .flat_map(|e| e.mce_errors.iter().cloned())
                     .collect();
-
                 let total_iterations = entries
                     .iter()
                     .map(|e| e.iterations_completed)
                     .max()
                     .unwrap_or(0);
+
+                // Aggregate frequency samples across all iterations.
+                let all_freq_samples: Vec<u64> = entries
+                    .iter()
+                    .flat_map(|e| e.freq_samples.iter().map(|(_, khz)| *khz))
+                    .collect();
+                let avg_freq_khz = if all_freq_samples.is_empty() {
+                    None
+                } else {
+                    let sum: u64 = all_freq_samples.iter().sum();
+                    Some(sum / all_freq_samples.len() as u64)
+                };
+
+                // Take freq_max_khz from the first non-None entry.
+                let freq_max_khz = entries.iter().find_map(|e| e.freq_max_khz);
+
+                let total_cooldowns: u32 = entries.iter().map(|e| e.cooldown_count).sum();
 
                 Some(AggregatedCoreResult {
                     core_id,
@@ -474,6 +537,9 @@ impl<'a> StabilityReport<'a> {
                     all_mprime_errors,
                     all_mce_errors,
                     total_iterations,
+                    avg_freq_khz,
+                    freq_max_khz,
+                    total_cooldowns,
                 })
             })
             .collect()
@@ -572,6 +638,9 @@ mod tests {
                 mce_errors: Vec::new(),
                 duration_tested: Duration::from_secs(360),
                 iterations_completed: 3,
+                freq_samples: Vec::new(),
+                freq_max_khz: None,
+                cooldown_count: 0,
             }],
             total_duration: Duration::from_secs(360),
             iterations_completed: 3,
@@ -647,6 +716,9 @@ mod tests {
                     mce_errors: Vec::new(),
                     duration_tested: Duration::from_secs(360),
                     iterations_completed: 3,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
                 CoreTestResult {
                     physical_core_id: 1,
@@ -657,6 +729,9 @@ mod tests {
                     mce_errors: Vec::new(),
                     duration_tested: Duration::from_secs(360),
                     iterations_completed: 3,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
             ],
             total_duration: Duration::from_secs(720),
@@ -691,6 +766,9 @@ mod tests {
                     mce_errors: Vec::new(),
                     duration_tested: Duration::from_secs(360),
                     iterations_completed: 3,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
                 CoreTestResult {
                     physical_core_id: 1,
@@ -706,6 +784,9 @@ mod tests {
                     mce_errors: Vec::new(),
                     duration_tested: Duration::from_secs(120),
                     iterations_completed: 2,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
             ],
             total_duration: Duration::from_secs(480),
@@ -745,6 +826,9 @@ mod tests {
                 }],
                 duration_tested: Duration::from_secs(120),
                 iterations_completed: 1,
+                freq_samples: Vec::new(),
+                freq_max_khz: None,
+                cooldown_count: 0,
             }],
             total_duration: Duration::from_secs(120),
             iterations_completed: 1,
@@ -776,6 +860,9 @@ mod tests {
                     mce_errors: Vec::new(),
                     duration_tested: Duration::from_secs(360),
                     iterations_completed: 1,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
                 CoreTestResult {
                     physical_core_id: 1,
@@ -786,6 +873,9 @@ mod tests {
                     mce_errors: Vec::new(),
                     duration_tested: Duration::from_secs(60),
                     iterations_completed: 1,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
             ],
             total_duration: Duration::from_secs(420),
@@ -815,6 +905,9 @@ mod tests {
                 mce_errors: Vec::new(),
                 duration_tested: Duration::from_secs(1080),
                 iterations_completed: 3,
+                freq_samples: Vec::new(),
+                freq_max_khz: None,
+                cooldown_count: 0,
             }],
             total_duration: Duration::from_secs(1080),
             iterations_completed: 3,
@@ -986,6 +1079,9 @@ mod tests {
                 mce_errors: Vec::new(),
                 duration_tested: Duration::from_secs(120),
                 iterations_completed: 1,
+                freq_samples: Vec::new(),
+                freq_max_khz: None,
+                cooldown_count: 0,
             }],
             total_duration: Duration::from_secs(120),
             iterations_completed: 1,
@@ -1113,6 +1209,9 @@ mod tests {
                 mce_errors: Vec::new(),
                 duration_tested: Duration::from_secs(360),
                 iterations_completed: 1,
+                freq_samples: Vec::new(),
+                freq_max_khz: None,
+                cooldown_count: 0,
             }],
             total_duration: Duration::from_secs(360),
             iterations_completed: 1,
@@ -1161,6 +1260,9 @@ mod tests {
                     mce_errors: Vec::new(),
                     duration_tested: Duration::from_secs(360),
                     iterations_completed: 1,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
                 CoreTestResult {
                     physical_core_id: 1,
@@ -1171,6 +1273,9 @@ mod tests {
                     mce_errors: Vec::new(),
                     duration_tested: Duration::from_secs(360),
                     iterations_completed: 1,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
             ],
             total_duration: Duration::from_secs(720),
@@ -1201,6 +1306,9 @@ mod tests {
                     mce_errors: Vec::new(),
                     duration_tested: Duration::from_secs(360),
                     iterations_completed: 3,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
                 CoreTestResult {
                     physical_core_id: 0,
@@ -1211,6 +1319,9 @@ mod tests {
                     mce_errors: Vec::new(),
                     duration_tested: Duration::from_secs(360),
                     iterations_completed: 3,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
                 CoreTestResult {
                     physical_core_id: 0,
@@ -1221,6 +1332,9 @@ mod tests {
                     mce_errors: Vec::new(),
                     duration_tested: Duration::from_secs(360),
                     iterations_completed: 3,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
             ],
             total_duration: Duration::from_secs(1080),
@@ -1258,6 +1372,9 @@ mod tests {
                     mce_errors: Vec::new(),
                     duration_tested: Duration::from_secs(360),
                     iterations_completed: 1,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
                 CoreTestResult {
                     physical_core_id: 1,
@@ -1268,6 +1385,9 @@ mod tests {
                     mce_errors: Vec::new(),
                     duration_tested: Duration::from_secs(120),
                     iterations_completed: 2,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
                 CoreTestResult {
                     physical_core_id: 1,
@@ -1278,6 +1398,9 @@ mod tests {
                     mce_errors: Vec::new(),
                     duration_tested: Duration::from_secs(360),
                     iterations_completed: 3,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
             ],
             total_duration: Duration::from_secs(840),
@@ -1308,6 +1431,9 @@ mod tests {
                     mce_errors: Vec::new(),
                     duration_tested: Duration::from_secs(0),
                     iterations_completed: 0,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
                 CoreTestResult {
                     physical_core_id: 2,
@@ -1318,6 +1444,9 @@ mod tests {
                     mce_errors: Vec::new(),
                     duration_tested: Duration::from_secs(0),
                     iterations_completed: 0,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
             ],
             total_duration: Duration::from_secs(0),
@@ -1360,6 +1489,9 @@ mod tests {
                     mce_errors: Vec::new(),
                     duration_tested: Duration::from_secs(120),
                     iterations_completed: 1,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
                 CoreTestResult {
                     physical_core_id: 0,
@@ -1370,6 +1502,9 @@ mod tests {
                     mce_errors: vec![mce_err.clone()],
                     duration_tested: Duration::from_secs(120),
                     iterations_completed: 2,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
             ],
             total_duration: Duration::from_secs(240),
@@ -1400,6 +1535,9 @@ mod tests {
                     mce_errors: Vec::new(),
                     duration_tested: Duration::from_secs(360),
                     iterations_completed: 1,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
                 CoreTestResult {
                     physical_core_id: 0,
@@ -1410,6 +1548,9 @@ mod tests {
                     mce_errors: Vec::new(),
                     duration_tested: Duration::from_secs(60),
                     iterations_completed: 1,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
             ],
             total_duration: Duration::from_secs(420),
@@ -1439,6 +1580,9 @@ mod tests {
                     mce_errors: Vec::new(),
                     duration_tested: Duration::from_secs(360),
                     iterations_completed: 2,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
                 CoreTestResult {
                     physical_core_id: 1,
@@ -1449,6 +1593,9 @@ mod tests {
                     mce_errors: Vec::new(),
                     duration_tested: Duration::from_secs(360),
                     iterations_completed: 2,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
                 CoreTestResult {
                     physical_core_id: 0,
@@ -1459,6 +1606,9 @@ mod tests {
                     mce_errors: Vec::new(),
                     duration_tested: Duration::from_secs(360),
                     iterations_completed: 2,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
                 CoreTestResult {
                     physical_core_id: 1,
@@ -1469,6 +1619,9 @@ mod tests {
                     mce_errors: Vec::new(),
                     duration_tested: Duration::from_secs(360),
                     iterations_completed: 2,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
             ],
             total_duration: Duration::from_secs(1440),
@@ -1502,6 +1655,9 @@ mod tests {
                     mce_errors: Vec::new(),
                     duration_tested: Duration::from_secs(120),
                     iterations_completed: 1,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
                 CoreTestResult {
                     physical_core_id: 1,
@@ -1512,6 +1668,9 @@ mod tests {
                     mce_errors: Vec::new(),
                     duration_tested: Duration::from_secs(120),
                     iterations_completed: 2,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
             ],
             total_duration: Duration::from_secs(240),
@@ -1549,6 +1708,9 @@ mod tests {
                     mce_errors: Vec::new(),
                     duration_tested: Duration::from_secs(360),
                     iterations_completed: 1,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
                 CoreTestResult {
                     physical_core_id: 2,
@@ -1559,6 +1721,9 @@ mod tests {
                     mce_errors: Vec::new(),
                     duration_tested: Duration::from_secs(0),
                     iterations_completed: 0,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
             ],
             total_duration: Duration::from_secs(360),
@@ -1669,6 +1834,9 @@ mod tests {
                     mce_errors: Vec::new(),
                     duration_tested: Duration::from_secs(120),
                     iterations_completed: 1,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
                 CoreTestResult {
                     physical_core_id: 0,
@@ -1686,6 +1854,9 @@ mod tests {
                     }],
                     duration_tested: Duration::from_secs(120),
                     iterations_completed: 2,
+                    freq_samples: Vec::new(),
+                    freq_max_khz: None,
+                    cooldown_count: 0,
                 },
             ],
             total_duration: Duration::from_secs(240),

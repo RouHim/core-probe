@@ -51,6 +51,21 @@ pub enum TestEvent {
         message: String,
     },
     CpuLoadSnapshot(CpuLoadSnapshot),
+    ThermalSnapshot {
+        tctl: f32,
+        core_temps: BTreeMap<u32, f32>,
+        core_freqs: BTreeMap<u32, u64>,
+    },
+    ThermalThrottlePause {
+        physical_core_id: u32,
+        bios_index: u32,
+        tctl: f32,
+    },
+    ThermalThrottleResume {
+        physical_core_id: u32,
+        bios_index: u32,
+        tctl: f32,
+    },
 }
 
 pub type EventSender = mpsc::Sender<TestEvent>;
@@ -105,6 +120,23 @@ pub fn create_cli_event_printer(receiver: EventReceiver) -> thread::JoinHandle<(
                 }
                 TestEvent::CpuLoadSnapshot(_) => {
                     // CLI mode ignores CPU load snapshots
+                }
+                TestEvent::ThermalSnapshot { .. } => {
+                    // CLI mode ignores thermal snapshots
+                }
+                TestEvent::ThermalThrottlePause {
+                    bios_index, tctl, ..
+                } => {
+                    println!(
+                        "  Thermal throttle: pausing core {bios_index} (Tctl={tctl:.0}\u{b0}C)"
+                    );
+                }
+                TestEvent::ThermalThrottleResume {
+                    bios_index, tctl, ..
+                } => {
+                    println!(
+                        "  Thermal throttle: resuming core {bios_index} (Tctl={tctl:.0}\u{b0}C)"
+                    );
                 }
             }
         }

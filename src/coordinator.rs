@@ -15,12 +15,23 @@ use crate::mce_monitor::{MceError, MceMonitor};
 use crate::mprime_config::{MprimeConfig, StressTestMode};
 use crate::mprime_runner::MprimeRunner;
 use crate::signal_handler;
+use crate::thermal_monitor::{self, ThermalMonitor};
 
 const SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const ERROR_POLL_INTERVAL: Duration = Duration::from_secs(5);
 const THREAD_PIN_INTERVAL: Duration = Duration::from_secs(5);
 const INITIAL_PIN_DELAY: Duration = Duration::from_secs(3);
 
+/// Pause the stress test if Tctl exceeds this threshold (in °C).
+const THERMAL_THROTTLE_THRESHOLD_C: f32 = 80.0;
+/// Resume the stress test once Tctl drops below this target (in °C).
+const COOLDOWN_TARGET_C: f32 = 50.0;
+/// Maximum wall-clock time to wait for cooldown before resuming anyway.
+const COOLDOWN_TIMEOUT: Duration = Duration::from_secs(60);
+/// Maximum number of thermal cooldown pauses per core per iteration.
+const MAX_COOLDOWN_PAUSES: u32 = 3;
+/// Interval between temperature checks during cooldown.
+const COOLDOWN_POLL_INTERVAL: Duration = Duration::from_secs(2);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreStatus {
     Idle,
@@ -41,6 +52,12 @@ pub struct CoreTestResult {
     pub mce_errors: Vec<MceError>,
     pub duration_tested: Duration,
     pub iterations_completed: u32,
+    /// (elapsed, freq_khz) samples collected during the test.
+    pub freq_samples: Vec<(Duration, u64)>,
+    /// Maximum boost frequency for this core (from cpuinfo_max_freq).
+    pub freq_max_khz: Option<u64>,
+    /// Number of thermal cooldown pauses during this test.
+    pub cooldown_count: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +76,7 @@ pub struct Coordinator {
     bail: bool,
     event_sender: Option<EventSender>,
     stress_mode: Option<StressTestMode>,
+    thermal_monitor: ThermalMonitor,
 }
 
 trait RunnerControl {
@@ -153,6 +171,7 @@ impl Coordinator {
             bail,
             event_sender,
             stress_mode,
+            thermal_monitor: ThermalMonitor::detect(),
         }
     }
 
@@ -235,6 +254,9 @@ impl Coordinator {
                         mce_errors: Vec::new(),
                         duration_tested: Duration::ZERO,
                         iterations_completed: iteration + 1,
+                        freq_samples: Vec::new(),
+                        freq_max_khz: None,
+                        cooldown_count: 0,
                     });
                     continue;
                 }
@@ -385,6 +407,12 @@ impl Coordinator {
         let mut next_error_poll = ERROR_POLL_INTERVAL;
         let mut next_pin_poll = INITIAL_PIN_DELAY + THREAD_PIN_INTERVAL;
 
+        // Read max boost frequency once at test start.
+        let freq_max_khz = logical_cpu_ids
+            .first()
+            .and_then(|&cpu| thermal_monitor::read_max_freq(cpu).ok());
+        let mut freq_samples: Vec<(Duration, u64)> = Vec::new();
+        let mut cooldown_count: u32 = 0;
         while elapsed < self.duration_per_core {
             if (hooks.is_shutdown_requested)() {
                 runner
@@ -399,10 +427,20 @@ impl Coordinator {
                     mce_errors,
                     duration_tested: elapsed,
                     iterations_completed: iteration,
+                    freq_samples,
+                    freq_max_khz,
+                    cooldown_count,
                 });
             }
 
             if elapsed >= next_error_poll {
+                // Sample current frequency alongside error polling.
+                if let Some(&first_cpu) = logical_cpu_ids.first() {
+                    if let Ok(freq_khz) = thermal_monitor::read_freq(first_cpu) {
+                        freq_samples.push((elapsed, freq_khz));
+                    }
+                }
+
                 collect_new_errors(
                     core_id,
                     &working_dir,
@@ -426,6 +464,9 @@ impl Coordinator {
                         mce_errors,
                         duration_tested: elapsed,
                         iterations_completed: iteration,
+                        freq_samples,
+                        freq_max_khz,
+                        cooldown_count,
                     });
                 }
 
@@ -475,10 +516,104 @@ impl Coordinator {
                     mce_errors,
                     duration_tested: elapsed,
                     iterations_completed: iteration,
+                    freq_samples,
+                    freq_max_khz,
+                    cooldown_count,
                 });
             }
 
             (hooks.sleep_fn)(SHUTDOWN_POLL_INTERVAL);
+
+            // --- Thermal throttling cooldown ---
+            // If Tctl exceeds the threshold and we haven't exhausted our cooldown
+            // budget, pause mprime and let the chip cool before resuming.
+            if self.thermal_monitor.is_available() && cooldown_count < MAX_COOLDOWN_PAUSES {
+                if let Ok(snapshot) = self.thermal_monitor.read_temps() {
+                    if snapshot.tctl > THERMAL_THROTTLE_THRESHOLD_C {
+                        cooldown_count += 1;
+
+                        runner.stop().with_context(|| {
+                            format!("failed to stop mprime for thermal cooldown on core {core_id}")
+                        })?;
+
+                        self.emit_event(TestEvent::ThermalThrottlePause {
+                            physical_core_id: core_id,
+                            bios_index: bios_idx,
+                            tctl: snapshot.tctl,
+                        });
+
+                        let cooldown_deadline = Instant::now() + COOLDOWN_TIMEOUT;
+                        loop {
+                            if (hooks.is_shutdown_requested)() {
+                                return Ok(CoreTestResult {
+                                    physical_core_id: core_id,
+                                    bios_index: topology.bios_index(core_id).unwrap_or(core_id),
+                                    logical_cpu_ids,
+                                    status: CoreStatus::Interrupted,
+                                    mprime_errors,
+                                    mce_errors,
+                                    duration_tested: elapsed,
+                                    iterations_completed: iteration,
+                                    freq_samples,
+                                    freq_max_khz,
+                                    cooldown_count,
+                                });
+                            }
+
+                            if Instant::now() >= cooldown_deadline {
+                                warn!(
+                                    core_id,
+                                    cooldown_count,
+                                    "thermal cooldown timed out; resuming with test"
+                                );
+                                break;
+                            }
+
+                            match self.thermal_monitor.read_temps() {
+                                Ok(s) if s.tctl <= COOLDOWN_TARGET_C => break,
+                                Err(e) => {
+                                    warn!(%e, "thermal read failed during cooldown; resuming");
+                                    break;
+                                }
+                                _ => {}
+                            }
+
+                            (hooks.sleep_fn)(COOLDOWN_POLL_INTERVAL);
+                        }
+
+                        // Rebuild config (cheap) and restart mprime on the same core.
+                        let restart_config = self.stress_mode.as_ref().map(MprimeConfig::from_mode);
+                        runner.start(core_id, &working_dir, restart_config.as_ref()).with_context(
+                            || {
+                                format!(
+                                    "failed to restart mprime after thermal cooldown on core {core_id}"
+                                )
+                            },
+                        )?;
+
+                        (hooks.sleep_fn)(INITIAL_PIN_DELAY);
+                        if let Some(&first_cpu) = logical_cpu_ids.first() {
+                            let _ = runner.pin_all_threads(first_cpu);
+                        }
+
+                        // Reset re-pin timer since we just pinned.
+                        next_pin_poll = elapsed + THREAD_PIN_INTERVAL;
+
+                        self.emit_event(TestEvent::ThermalThrottleResume {
+                            physical_core_id: core_id,
+                            bios_index: bios_idx,
+                            tctl: self
+                                .thermal_monitor
+                                .read_temps()
+                                .map(|s| s.tctl)
+                                .unwrap_or(0.0),
+                        });
+
+                        continue; // elapsed unchanged — stress time does not advance during cooldown
+                    }
+                }
+            }
+
             elapsed += SHUTDOWN_POLL_INTERVAL;
 
             self.emit_event(TestEvent::CoreTestProgress {
@@ -518,6 +653,9 @@ impl Coordinator {
             mce_errors,
             duration_tested: elapsed,
             iterations_completed: iteration,
+            freq_samples,
+            freq_max_khz,
+            cooldown_count,
         })
     }
 
@@ -1562,6 +1700,9 @@ mod tests {
             mce_errors: Vec::new(),
             duration_tested: Duration::from_secs(360),
             iterations_completed: 1,
+            freq_samples: Vec::new(),
+            freq_max_khz: None,
+            cooldown_count: 0,
         };
 
         let formatted = format_intermediate_result(&result);
@@ -1589,6 +1730,9 @@ mod tests {
             mce_errors: Vec::new(),
             duration_tested: Duration::from_secs(120),
             iterations_completed: 1,
+            freq_samples: Vec::new(),
+            freq_max_khz: None,
+            cooldown_count: 0,
         };
 
         let formatted = format_intermediate_result(&result);
@@ -1611,6 +1755,9 @@ mod tests {
             mce_errors: Vec::new(),
             duration_tested: Duration::ZERO,
             iterations_completed: 1,
+            freq_samples: Vec::new(),
+            freq_max_khz: None,
+            cooldown_count: 0,
         };
 
         let formatted = format_intermediate_result(&result);
@@ -1629,6 +1776,9 @@ mod tests {
             mce_errors: Vec::new(),
             duration_tested: Duration::from_secs(60),
             iterations_completed: 1,
+            freq_samples: Vec::new(),
+            freq_max_khz: None,
+            cooldown_count: 0,
         };
 
         let formatted = format_intermediate_result(&result);

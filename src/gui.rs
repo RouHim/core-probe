@@ -131,6 +131,12 @@ pub struct CoreProbeApp {
     pub event_sender: Option<crate::gui_events::EventSender>,
     pub extracted_binaries: Option<ExtractedBinaries>,
     pub cpu_poller_handle: Option<JoinHandle<()>>,
+    pub thermal_poller_handle: Option<JoinHandle<()>>,
+    pub tctl: Option<f32>,
+    pub core_temperatures: BTreeMap<u32, f32>,
+    pub core_frequencies: BTreeMap<u32, u64>,
+    pub core_freq_max: BTreeMap<u32, u64>,
+    pub thermal_throttled_cores: BTreeSet<u32>,
 }
 
 impl CoreProbeApp {
@@ -192,11 +198,25 @@ pub fn boot() -> (CoreProbeApp, Task<Message>) {
         event_sender: Some(event_sender.clone()),
         extracted_binaries,
         cpu_poller_handle: None,
+        thermal_poller_handle: None,
+        tctl: None,
+        core_temperatures: BTreeMap::new(),
+        core_frequencies: BTreeMap::new(),
+        core_freq_max: BTreeMap::new(),
+        thermal_throttled_cores: BTreeSet::new(),
     };
 
     if let Some(topology) = app.topology.clone() {
-        let handle = cpu_load_poller::spawn_poller(event_sender, Arc::new(topology));
+        let handle =
+            cpu_load_poller::spawn_poller(event_sender.clone(), Arc::new(topology.clone()));
         app.cpu_poller_handle = Some(handle);
+
+        let thermal = crate::thermal_monitor::ThermalMonitor::detect();
+        if thermal.is_available() {
+            let handle =
+                crate::thermal_poller::spawn_poller(event_sender, Arc::new(topology), thermal);
+            app.thermal_poller_handle = Some(handle);
+        }
     }
 
     (app, Task::none())
@@ -394,6 +414,10 @@ pub fn view(state: &CoreProbeApp) -> Element<'_, Message> {
             &state.core_progress,
             &state.core_results,
             &state.core_load_smoothed,
+            &state.core_temperatures,
+            &state.core_frequencies,
+            &state.thermal_throttled_cores,
+            &state.core_freq_max,
         )
     } else {
         container(text("CPU topology unavailable"))
@@ -538,6 +562,7 @@ fn process_event(state: &mut CoreProbeApp, event: TestEvent) {
             state.progress.cores_completed = 0;
             state.progress.current_core = None;
             state.core_progress.clear();
+            state.core_freq_max.clear();
             state.core_results.clear();
         }
         TestEvent::CoreTestStarting {
@@ -644,6 +669,47 @@ fn process_event(state: &mut CoreProbeApp, event: TestEvent) {
         }
         TestEvent::CpuLoadSnapshot(snapshot) => {
             push_load_sample(&mut state.core_load_history, &snapshot.loads);
+        }
+        TestEvent::ThermalSnapshot {
+            tctl,
+            core_temps,
+            core_freqs,
+        } => {
+            state.tctl = Some(tctl);
+            state.core_temperatures = core_temps;
+            for (&core_id, &freq_khz) in &core_freqs {
+                let entry = state.core_freq_max.entry(core_id).or_insert(0);
+                if freq_khz > *entry {
+                    *entry = freq_khz;
+                }
+            }
+            state.core_frequencies = core_freqs;
+        }
+        TestEvent::ThermalThrottlePause {
+            physical_core_id,
+            bios_index,
+            tctl,
+        } => {
+            state.thermal_throttled_cores.insert(physical_core_id);
+            append_log(
+                state,
+                LogLevel::Default,
+                format!("Core {bios_index}: thermal throttle pause (Tctl={tctl:.0}\u{b0}C)"),
+            );
+        }
+        TestEvent::ThermalThrottleResume {
+            physical_core_id,
+            bios_index,
+            tctl,
+        } => {
+            state.thermal_throttled_cores.remove(&physical_core_id);
+            append_log(
+                state,
+                LogLevel::Default,
+                format!(
+                    "Core {bios_index}: thermal cooldown complete, resumed (Tctl={tctl:.0}\u{b0}C)"
+                ),
+            );
         }
     }
 }
@@ -965,7 +1031,7 @@ pub fn run_gui() -> iced::Result {
         .title("core-probe — CPU Stability Tester")
         .subscription(subscription)
         .theme(theme)
-        .window_size(iced::Size::new(1400.0, 800.0))
+        .window_size(iced::Size::new(1400.0, 900.0))
         .centered()
         .run()
 }
@@ -997,6 +1063,12 @@ mod tests {
             event_sender: None,
             extracted_binaries: None,
             cpu_poller_handle: None,
+            thermal_poller_handle: None,
+            tctl: None,
+            core_temperatures: BTreeMap::new(),
+            core_frequencies: BTreeMap::new(),
+            core_freq_max: BTreeMap::new(),
+            thermal_throttled_cores: BTreeSet::new(),
         }
     }
 
@@ -1139,6 +1211,9 @@ mod tests {
             mce_errors: Vec::new(),
             duration_tested: std::time::Duration::from_secs(360),
             iterations_completed: 3,
+            freq_samples: Vec::new(),
+            freq_max_khz: None,
+            cooldown_count: 0,
         };
         process_event(&mut app, TestEvent::CoreTestCompleted { result });
         assert_eq!(*app.core_statuses.get(&0).unwrap(), CoreStatus::Passed);
@@ -1250,6 +1325,9 @@ mod tests {
             mce_errors: Vec::new(),
             duration_tested: std::time::Duration::from_secs(360),
             iterations_completed: 3,
+            freq_samples: Vec::new(),
+            freq_max_khz: None,
+            cooldown_count: 0,
         };
         process_event(&mut app, TestEvent::CoreTestCompleted { result });
         assert!(!app.core_progress.contains_key(&3));
@@ -1294,6 +1372,9 @@ mod tests {
                         mce_errors: Vec::new(),
                         duration_tested: Duration::from_secs(120),
                         iterations_completed: 1,
+                        freq_samples: Vec::new(),
+                        freq_max_khz: None,
+                        cooldown_count: 0,
                     }],
                     total_duration: Duration::from_secs(120),
                     iterations_completed: 1,
@@ -1346,6 +1427,9 @@ mod tests {
                         mce_errors: Vec::new(),
                         duration_tested: Duration::from_secs(120),
                         iterations_completed: 1,
+                        freq_samples: Vec::new(),
+                        freq_max_khz: None,
+                        cooldown_count: 0,
                     }],
                     total_duration: Duration::from_secs(120),
                     iterations_completed: 1,
@@ -1402,6 +1486,9 @@ mod tests {
             mce_errors: Vec::new(),
             duration_tested: std::time::Duration::from_secs(120),
             iterations_completed: 1,
+            freq_samples: Vec::new(),
+            freq_max_khz: None,
+            cooldown_count: 0,
         };
         process_event(&mut app, TestEvent::CoreTestCompleted { result });
 
@@ -1709,6 +1796,9 @@ mod tests {
                 mce_errors: Vec::new(),
                 duration_tested: std::time::Duration::from_secs(360),
                 iterations_completed: 3,
+                freq_samples: Vec::new(),
+                freq_max_khz: None,
+                cooldown_count: 0,
             },
             CoreTestResult {
                 physical_core_id: 1,
@@ -1719,6 +1809,9 @@ mod tests {
                 mce_errors: Vec::new(),
                 duration_tested: std::time::Duration::from_secs(360),
                 iterations_completed: 3,
+                freq_samples: Vec::new(),
+                freq_max_khz: None,
+                cooldown_count: 0,
             },
         ];
         let (summary, body, urgency) = build_completion_notification(&results);
@@ -1746,6 +1839,9 @@ mod tests {
                 mce_errors: Vec::new(),
                 duration_tested: std::time::Duration::from_secs(360),
                 iterations_completed: 3,
+                freq_samples: Vec::new(),
+                freq_max_khz: None,
+                cooldown_count: 0,
             },
             CoreTestResult {
                 physical_core_id: 8,
@@ -1756,6 +1852,9 @@ mod tests {
                 mce_errors: Vec::new(),
                 duration_tested: std::time::Duration::from_secs(120),
                 iterations_completed: 1,
+                freq_samples: Vec::new(),
+                freq_max_khz: None,
+                cooldown_count: 0,
             },
         ];
         let (summary, body, urgency) = build_completion_notification(&results);

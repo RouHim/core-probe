@@ -24,6 +24,8 @@ pub mod mprime_config;
 pub mod mprime_runner;
 pub mod report;
 pub mod signal_handler;
+pub mod thermal_monitor;
+pub mod thermal_poller;
 pub mod uefi_reader;
 
 use std::collections::BTreeSet;
