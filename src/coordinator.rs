@@ -72,8 +72,6 @@ pub struct Coordinator {
     duration_per_core: Duration,
     iteration_count: u32,
     core_filter: Option<Vec<u32>>,
-    quiet: bool,
-    bail: bool,
     event_sender: Option<EventSender>,
     stress_mode: Option<StressTestMode>,
     thermal_monitor: ThermalMonitor,
@@ -158,8 +156,6 @@ impl Coordinator {
         duration_per_core: Duration,
         iteration_count: u32,
         core_filter: Option<Vec<u32>>,
-        quiet: bool,
-        bail: bool,
         event_sender: Option<EventSender>,
         stress_mode: Option<StressTestMode>,
     ) -> Self {
@@ -167,8 +163,6 @@ impl Coordinator {
             duration_per_core,
             iteration_count,
             core_filter,
-            quiet,
-            bail,
             event_sender,
             stress_mode,
             thermal_monitor: ThermalMonitor::detect(),
@@ -295,11 +289,6 @@ impl Coordinator {
                     failed_cores.insert(result.physical_core_id);
                 }
                 results.push(result);
-
-                if self.bail && failed {
-                    interrupted = true;
-                    break 'iterations;
-                }
             }
             completed_iterations += 1;
             self.emit_event(TestEvent::IterationCompleted {
@@ -660,10 +649,6 @@ impl Coordinator {
     }
 
     fn emit_event(&self, event: TestEvent) {
-        if self.quiet && self.event_sender.is_none() {
-            return;
-        }
-
         if let Some(sender) = &self.event_sender {
             let _ = sender.send(event);
         }
@@ -860,8 +845,7 @@ mod tests {
     #[test]
     fn given_core_list_when_starting_cycle_then_tests_each_core_in_alternate_order() -> Result<()> {
         let fixture = TestFixture::new(&[(0, vec![0]), (1, vec![1]), (2, vec![2])])?;
-        let coordinator =
-            Coordinator::new(Duration::from_secs(1), 1, None, false, false, None, None);
+        let coordinator = Coordinator::new(Duration::from_secs(1), 1, None, None, None);
         let mut runner = FakeRunner::default();
         let mut parser = FakeParser::default();
         let mut monitor = FakeMceMonitor::default();
@@ -890,8 +874,7 @@ mod tests {
     #[test]
     fn given_duration_per_core_when_testing_then_runs_for_specified_time() -> Result<()> {
         let fixture = TestFixture::new(&[(0, vec![0])])?;
-        let coordinator =
-            Coordinator::new(Duration::from_secs(3), 1, None, false, false, None, None);
+        let coordinator = Coordinator::new(Duration::from_secs(3), 1, None, None, None);
         let mut runner = FakeRunner::default();
         let mut parser = FakeParser::default();
         let mut monitor = FakeMceMonitor::default();
@@ -916,15 +899,7 @@ mod tests {
     fn given_event_sender_when_testing_core_then_emits_progress_events() -> Result<()> {
         let fixture = TestFixture::new(&[(0, vec![0])])?;
         let (sender, receiver) = std::sync::mpsc::channel();
-        let coordinator = Coordinator::new(
-            Duration::from_secs(6),
-            1,
-            None,
-            false,
-            false,
-            Some(sender),
-            None,
-        );
+        let coordinator = Coordinator::new(Duration::from_secs(6), 1, None, Some(sender), None);
         let mut runner = FakeRunner::default();
         let mut parser = FakeParser::default();
         let mut monitor = FakeMceMonitor::default();
@@ -993,8 +968,7 @@ mod tests {
     fn given_error_detected_when_testing_core_then_marks_core_as_failed() -> Result<()> {
         let fixture = TestFixture::new(&[(0, vec![0])])?;
         fixture.write_results(1, 0, "FATAL ERROR: test failure\n")?;
-        let coordinator =
-            Coordinator::new(Duration::from_secs(6), 1, None, false, false, None, None);
+        let coordinator = Coordinator::new(Duration::from_secs(6), 1, None, None, None);
         let mut runner = FakeRunner::default();
         let mut parser = FakeParser::default();
         let mut monitor = FakeMceMonitor::default();
@@ -1019,8 +993,7 @@ mod tests {
     #[test]
     fn given_shutdown_signal_when_mid_cycle_then_stops_gracefully() -> Result<()> {
         let fixture = TestFixture::new(&[(0, vec![0]), (1, vec![1])])?;
-        let coordinator =
-            Coordinator::new(Duration::from_secs(6), 1, None, false, false, None, None);
+        let coordinator = Coordinator::new(Duration::from_secs(6), 1, None, None, None);
         let mut runner = FakeRunner::default();
         let mut parser = FakeParser::default();
         let mut monitor = FakeMceMonitor::default();
@@ -1048,8 +1021,7 @@ mod tests {
     #[test]
     fn given_all_cores_tested_when_complete_then_returns_full_results() -> Result<()> {
         let fixture = TestFixture::new(&[(0, vec![0]), (1, vec![1]), (2, vec![2])])?;
-        let coordinator =
-            Coordinator::new(Duration::from_secs(1), 1, None, false, false, None, None);
+        let coordinator = Coordinator::new(Duration::from_secs(1), 1, None, None, None);
         let mut runner = FakeRunner::default();
         let mut parser = FakeParser::default();
         let mut monitor = FakeMceMonitor::default();
@@ -1089,8 +1061,7 @@ mod tests {
     #[test]
     fn given_iteration_count_when_configured_then_repeats_full_cycle() -> Result<()> {
         let fixture = TestFixture::new(&[(0, vec![0]), (1, vec![1])])?;
-        let coordinator =
-            Coordinator::new(Duration::from_secs(1), 3, None, false, false, None, None);
+        let coordinator = Coordinator::new(Duration::from_secs(1), 3, None, None, None);
         let mut runner = FakeRunner::default();
         let mut parser = FakeParser::default();
         let mut monitor = FakeMceMonitor::default();
@@ -1117,8 +1088,7 @@ mod tests {
     fn given_core_failure_during_test_when_monitoring_then_captures_error_details() -> Result<()> {
         let fixture = TestFixture::new(&[(0, vec![0])])?;
         fixture.write_results(1, 0, "Hardware failure detected running 1344K FFT\n")?;
-        let coordinator =
-            Coordinator::new(Duration::from_secs(6), 1, None, false, false, None, None);
+        let coordinator = Coordinator::new(Duration::from_secs(6), 1, None, None, None);
         let mut runner = FakeRunner::default();
         let mut parser = FakeParser::default();
         let mut monitor = FakeMceMonitor::default();
@@ -1158,15 +1128,7 @@ mod tests {
     #[test]
     fn given_core_filter_when_subset_specified_then_only_tests_those_cores() -> Result<()> {
         let fixture = TestFixture::new(&[(0, vec![0]), (1, vec![1]), (2, vec![2])])?;
-        let coordinator = Coordinator::new(
-            Duration::from_secs(1),
-            1,
-            Some(vec![0, 2]),
-            false,
-            false,
-            None,
-            None,
-        );
+        let coordinator = Coordinator::new(Duration::from_secs(1), 1, Some(vec![0, 2]), None, None);
         let mut runner = FakeRunner::default();
         let mut parser = FakeParser::default();
         let mut monitor = FakeMceMonitor::default();
@@ -1193,15 +1155,7 @@ mod tests {
     #[test]
     fn given_core_filter_in_user_order_when_running_then_tests_exact_input_order() -> Result<()> {
         let fixture = TestFixture::new(&[(0, vec![0]), (1, vec![1]), (2, vec![2])])?;
-        let coordinator = Coordinator::new(
-            Duration::from_secs(1),
-            1,
-            Some(vec![2, 0]),
-            false,
-            false,
-            None,
-            None,
-        );
+        let coordinator = Coordinator::new(Duration::from_secs(1), 1, Some(vec![2, 0]), None, None);
         let mut runner = FakeRunner::default();
         let mut parser = FakeParser::default();
         let mut monitor = FakeMceMonitor::default();
@@ -1370,8 +1324,7 @@ mod tests {
     #[test]
     fn given_monitor_lifecycle_when_running_cycle_then_starts_and_stops_monitor() -> Result<()> {
         let fixture = TestFixture::new(&[(0, vec![0])])?;
-        let coordinator =
-            Coordinator::new(Duration::from_secs(1), 1, None, false, false, None, None);
+        let coordinator = Coordinator::new(Duration::from_secs(1), 1, None, None, None);
         let mut runner = FakeRunner::default();
         let mut parser = FakeParser::default();
         let started = Rc::new(Cell::new(false));
@@ -1422,8 +1375,7 @@ mod tests {
     #[test]
     fn given_shutdown_signal_when_running_then_polls_at_one_second_intervals() -> Result<()> {
         let fixture = TestFixture::new(&[(0, vec![0])])?;
-        let coordinator =
-            Coordinator::new(Duration::from_secs(6), 1, None, false, false, None, None);
+        let coordinator = Coordinator::new(Duration::from_secs(6), 1, None, None, None);
         let mut runner = FakeRunner::default();
         let mut parser = FakeParser::default();
         let mut monitor = FakeMceMonitor::default();
@@ -1555,46 +1507,14 @@ mod tests {
         assert_eq!(ordered, vec![0, 5, 2, 9]);
     }
 
-    // ── Bail behavior tests ──
+    // ── Failure continuation tests ──
 
     #[test]
-    fn given_bail_enabled_when_first_core_fails_then_stops_immediately() -> Result<()> {
-        // GIVEN: Two cores, first one fails, bail enabled
+    fn given_core_fails_when_testing_then_continues_to_next_core() -> Result<()> {
+        // GIVEN: Two cores, first one fails
         let fixture = TestFixture::new(&[(0, vec![0]), (1, vec![1])])?;
         fixture.write_results(1, 0, "FATAL ERROR: test failure\n")?;
-        let coordinator = Coordinator::new(Duration::from_secs(6), 1, None, true, true, None, None);
-        let mut runner = FakeRunner::default();
-        let mut parser = FakeParser::default();
-        let mut monitor = FakeMceMonitor::default();
-
-        // WHEN: Running the cycle
-        let results = coordinator.run_with_components(
-            &fixture.topology,
-            &fixture.extracted,
-            &mut runner,
-            &mut parser,
-            &mut monitor,
-            PollHooks {
-                is_shutdown_requested: &|| false,
-                sleep_fn: &|_| {},
-            },
-        )?;
-
-        // THEN: Stops after first core, second core never tested
-        assert!(results.interrupted);
-        assert_eq!(results.results.len(), 1);
-        assert_eq!(results.results[0].status, CoreStatus::Failed);
-        assert_eq!(runner.start_order, vec![0]);
-        Ok(())
-    }
-
-    #[test]
-    fn given_bail_disabled_when_core_fails_then_continues_testing() -> Result<()> {
-        // GIVEN: Two cores, first one fails, bail disabled
-        let fixture = TestFixture::new(&[(0, vec![0]), (1, vec![1])])?;
-        fixture.write_results(1, 0, "FATAL ERROR: test failure\n")?;
-        let coordinator =
-            Coordinator::new(Duration::from_secs(6), 1, None, true, false, None, None);
+        let coordinator = Coordinator::new(Duration::from_secs(6), 1, None, None, None);
         let mut runner = FakeRunner::default();
         let mut parser = FakeParser::default();
         let mut monitor = FakeMceMonitor::default();
@@ -1622,11 +1542,10 @@ mod tests {
     }
 
     #[test]
-    fn given_bail_enabled_when_all_pass_then_completes_normally() -> Result<()> {
-        // GIVEN: Two cores, both pass, bail enabled
+    fn given_all_cores_pass_when_testing_then_completes_normally() -> Result<()> {
+        // GIVEN: Two cores, both pass
         let fixture = TestFixture::new(&[(0, vec![0]), (1, vec![1])])?;
-        let coordinator =
-            Coordinator::new(Duration::from_secs(1), 1, None, false, true, None, None);
+        let coordinator = Coordinator::new(Duration::from_secs(1), 1, None, None, None);
         let mut runner = FakeRunner::default();
         let mut parser = FakeParser::default();
         let mut monitor = FakeMceMonitor::default();
@@ -1652,38 +1571,6 @@ mod tests {
             .iter()
             .all(|r| r.status == CoreStatus::Passed));
         assert_eq!(runner.start_order, vec![0, 1]);
-        Ok(())
-    }
-
-    #[test]
-    fn given_bail_enabled_when_failure_in_second_iteration_then_stops() -> Result<()> {
-        // GIVEN: One core, fails in iteration 2, bail enabled
-        let fixture = TestFixture::new(&[(0, vec![0])])?;
-        fixture.write_results(2, 0, "FATAL ERROR: second iteration failure\n")?;
-        let coordinator = Coordinator::new(Duration::from_secs(6), 3, None, true, true, None, None);
-        let mut runner = FakeRunner::default();
-        let mut parser = FakeParser::default();
-        let mut monitor = FakeMceMonitor::default();
-
-        // WHEN: Running the cycle
-        let results = coordinator.run_with_components(
-            &fixture.topology,
-            &fixture.extracted,
-            &mut runner,
-            &mut parser,
-            &mut monitor,
-            PollHooks {
-                is_shutdown_requested: &|| false,
-                sleep_fn: &|_| {},
-            },
-        )?;
-
-        // THEN: Stops after the failed iteration
-        assert!(results.interrupted);
-        assert_eq!(results.results.len(), 2);
-        assert_eq!(results.results[0].status, CoreStatus::Passed);
-        assert_eq!(results.results[1].status, CoreStatus::Failed);
-        assert_eq!(results.iterations_completed, 1);
         Ok(())
     }
 
@@ -1796,8 +1683,7 @@ mod tests {
         // GIVEN: Two cores, core 0 fails in iteration 1, 3 iterations total
         let fixture = TestFixture::new(&[(0, vec![0]), (1, vec![1])])?;
         fixture.write_results(1, 0, "FATAL ERROR: instability detected\n")?;
-        let coordinator =
-            Coordinator::new(Duration::from_secs(6), 3, None, false, false, None, None);
+        let coordinator = Coordinator::new(Duration::from_secs(6), 3, None, None, None);
         let mut runner = FakeRunner::default();
         let mut parser = FakeParser::default();
         let mut monitor = FakeMceMonitor::default();

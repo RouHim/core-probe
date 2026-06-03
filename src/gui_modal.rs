@@ -1,11 +1,12 @@
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use iced::widget::{
-    button, center, column, container, mouse_area, opaque, row, stack, text, Space,
+    button, center, column, container, mouse_area, opaque, row, stack, text, text_input, Space,
 };
-use iced::{Color, Element, Length};
+use iced::{Color, Element, Length, Padding};
 
-use crate::gui::{Message, ModalContent};
+use crate::gui::{ErrorCategory, Message, ModalContent, ModalCoreResult};
 use crate::gui_theme;
 
 /// Public entry point for the modal overlay. Callers pass the base UI element,
@@ -13,7 +14,7 @@ use crate::gui_theme;
 /// behaviour and card layout are fully encapsulated here.
 pub fn modal_overlay_view<'a>(
     base: Element<'a, Message>,
-    content: &ModalContent,
+    content: &'a ModalContent,
     is_dark: bool,
 ) -> Element<'a, Message> {
     let card = build_result_card(content, is_dark);
@@ -54,7 +55,7 @@ fn modal<'a>(
 // Result card
 // ---------------------------------------------------------------------------
 
-fn build_result_card<'a>(content: &ModalContent, is_dark: bool) -> Element<'a, Message> {
+fn build_result_card<'a>(content: &'a ModalContent, is_dark: bool) -> Element<'a, Message> {
     let card_bg = if is_dark {
         gui_theme::DARK_BG_SECONDARY
     } else {
@@ -70,11 +71,6 @@ fn build_result_card<'a>(content: &ModalContent, is_dark: bool) -> Element<'a, M
     } else {
         gui_theme::LIGHT_TEXT_PRIMARY
     };
-    let text_secondary = if is_dark {
-        gui_theme::DARK_TEXT_SECONDARY
-    } else {
-        gui_theme::LIGHT_TEXT_SECONDARY
-    };
     let btn_bg = if is_dark {
         gui_theme::DARK_BUTTON_BG
     } else {
@@ -84,11 +80,6 @@ fn build_result_card<'a>(content: &ModalContent, is_dark: bool) -> Element<'a, M
         gui_theme::DARK_BUTTON_TEXT
     } else {
         gui_theme::LIGHT_BUTTON_TEXT
-    };
-    let section_header_color = if is_dark {
-        gui_theme::DARK_BADGE_PBO_TEXT
-    } else {
-        gui_theme::LIGHT_BADGE_PBO_TEXT
     };
 
     let has_unstable = !content.unstable_cores.is_empty();
@@ -103,66 +94,55 @@ fn build_result_card<'a>(content: &ModalContent, is_dark: bool) -> Element<'a, M
 
     let mut body = column![title].spacing(12).padding(24).width(Length::Fill);
 
+    // ── Summary badge bar ──
     if has_unstable {
-        let header: Element<'a, Message> = text("Unstable Cores:")
-            .size(14)
-            .color(section_header_color)
-            .into();
-        body = body.push(header);
+        let bios_indices: Vec<u32> = content
+            .unstable_cores
+            .iter()
+            .map(|c| c.bios_index)
+            .collect();
+        body = body.push(build_summary_bar(
+            content.unstable_cores.len(),
+            content.stable_core_indices.len(),
+            &bios_indices,
+            is_dark,
+        ));
 
+        // ── Group unstable cores by CCD ──
+        let mut ccd_groups: BTreeMap<u32, Vec<&ModalCoreResult>> = BTreeMap::new();
         for c in &content.unstable_cores {
-            let line: Element<'a, Message> = text(format!(
-                "\u{2022} Core {} (CCD{}) \u{2014} {}",
-                c.bios_index, c.ccd_index, c.error_summary
-            ))
-            .size(13)
-            .color(text_primary)
-            .into();
-            body = body.push(line);
+            ccd_groups.entry(c.ccd_index).or_default().push(c);
+        }
+        for (ccd_idx, cores) in &ccd_groups {
+            body = body.push(build_ccd_group(*ccd_idx, cores, is_dark));
         }
     }
 
-    let stable_list = if content.stable_core_indices.is_empty() {
-        "None".to_string()
-    } else {
-        content
-            .stable_core_indices
-            .iter()
-            .map(|i| i.to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    let stable_line: Element<'a, Message> = text(format!("Stable: {stable_list}"))
-        .size(13)
-        .color(text_secondary)
+    // ── Stable core chips ──
+    if !content.stable_core_indices.is_empty() {
+        body = body.push(build_stable_chips(&content.stable_core_indices, is_dark));
+    }
+
+    // ── QR + next steps ──
+    let qr_widget = crate::gui_qr::qr_code_view(&content.qr_content, is_dark, 5.0);
+    let qr_container = container(qr_widget).width(Length::Shrink);
+    let steps = build_next_steps(is_dark);
+    let qr_row: Element<'a, Message> = row![qr_container, Space::new().width(16), steps]
+        .align_y(iced::Alignment::Start)
         .into();
-    body = body.push(stable_line);
+    body = body.push(qr_row);
 
-    let duration_line: Element<'a, Message> = text(format!(
-        "Duration: {} | Iterations: {}",
-        format_duration(content.total_duration),
-        content.iterations_completed
-    ))
-    .size(13)
-    .color(text_secondary)
-    .into();
-    body = body.push(duration_line);
+    // ── Footer stats ──
+    body = body.push(build_modal_footer(
+        content.total_duration,
+        content.iterations_completed,
+        is_dark,
+    ));
 
-    let qr_widget: Element<'a, Message> =
-        crate::gui_qr::qr_code_view(&content.qr_content, is_dark, 6.0);
-    let qr_centered: Element<'a, Message> = container(qr_widget).center_x(Length::Fill).into();
-    body = body.push(qr_centered);
-
-    let instruction: Element<'a, Message> =
-        text("Scan QR code with phone before rebooting to BIOS")
-            .size(12)
-            .color(text_secondary)
-            .into();
-    body = body.push(instruction);
-
+    // ── Buttons ──
     let close_btn: Element<'a, Message> = button(text("Close").size(14))
         .on_press(Message::DismissModal)
-        .padding(iced::Padding::from([6, 16]))
+        .padding(Padding::from([6, 16]))
         .style(move |_theme, _status| button::Style {
             background: Some(btn_bg.into()),
             text_color: btn_text,
@@ -176,7 +156,7 @@ fn build_result_card<'a>(content: &ModalContent, is_dark: bool) -> Element<'a, M
 
     let reboot_btn: Element<'a, Message> = button(text("Reboot to BIOS").size(14))
         .on_press(Message::RebootToFirmware)
-        .padding(iced::Padding::from([6, 16]))
+        .padding(Padding::from([6, 16]))
         .style(move |_theme, _status| button::Style {
             background: Some(
                 if is_dark {
@@ -202,7 +182,7 @@ fn build_result_card<'a>(content: &ModalContent, is_dark: bool) -> Element<'a, M
     body = body.push(button_row);
 
     container(body)
-        .max_width(500)
+        .max_width(580)
         .style(move |_theme: &iced::Theme| container::Style {
             background: Some(card_bg.into()),
             border: iced::Border {
@@ -213,6 +193,288 @@ fn build_result_card<'a>(content: &ModalContent, is_dark: bool) -> Element<'a, M
             ..container::Style::default()
         })
         .into()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper widgets
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Coloured summary bar: "● N UNSTABLE    ○ N STABLE"
+/// Coloured summary bar: "● N UNSTABLE [bios, list]    ○ N STABLE"
+fn build_summary_bar<'a>(
+    unstable_count: usize,
+    stable_count: usize,
+    bios_indices: &[u32],
+    is_dark: bool,
+) -> Element<'a, Message> {
+    let (unstable_color, stable_color) = if is_dark {
+        (gui_theme::DARK_ERROR_BORDER, gui_theme::DARK_CHIP_BG)
+    } else {
+        (gui_theme::LIGHT_ERROR_BORDER, gui_theme::LIGHT_CHIP_BG)
+    };
+    let text_color = if is_dark {
+        gui_theme::DARK_TEXT_PRIMARY
+    } else {
+        gui_theme::LIGHT_TEXT_PRIMARY
+    };
+
+    let comma_list: String = bios_indices
+        .iter()
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let inline_input: Element<'a, Message> = text_input("", &comma_list)
+        .size(12)
+        .width(Length::Shrink)
+        .padding(Padding::from([2, 4]))
+        .style(move |_theme, _status| text_input::Style {
+            background: Color::TRANSPARENT.into(),
+            border: iced::Border::default(),
+            icon: Color::TRANSPARENT,
+            placeholder: Default::default(),
+            value: text_color,
+            selection: Default::default(),
+        })
+        .into();
+
+    row![
+        text("\u{25CF}").color(unstable_color).size(14),
+        Space::new().width(4),
+        text(format!("{unstable_count} UNSTABLE"))
+            .color(text_color)
+            .size(14),
+        Space::new().width(4),
+        text("[").color(text_color).size(13),
+        inline_input,
+        text("]").color(text_color).size(13),
+        Space::new().width(12),
+        text("\u{25CB}").color(stable_color).size(14),
+        Space::new().width(4),
+        text(format!("{stable_count} STABLE"))
+            .color(text_color)
+            .size(14),
+    ]
+    .into()
+}
+
+/// A CCD group container with header and failure cards.
+fn build_ccd_group<'a>(
+    ccd_index: u32,
+    cores: &[&'a ModalCoreResult],
+    is_dark: bool,
+) -> Element<'a, Message> {
+    let header_color = if is_dark {
+        gui_theme::DARK_SECTION_HEADER
+    } else {
+        gui_theme::LIGHT_SECTION_HEADER
+    };
+    let header = text(format!("CCD{ccd_index}")).size(12).color(header_color);
+
+    let ccd_bg = if is_dark {
+        gui_theme::DARK_CCD_BG
+    } else {
+        gui_theme::LIGHT_CCD_BG
+    };
+    let ccd_border = if is_dark {
+        gui_theme::DARK_CCD_BORDER
+    } else {
+        gui_theme::LIGHT_CCD_BORDER
+    };
+
+    let mut cards_col = column![header].spacing(6);
+    for core in cores {
+        cards_col = cards_col.push(build_failure_card(core, is_dark));
+    }
+
+    container(cards_col)
+        .padding(12)
+        .style(move |_theme| container::Style {
+            background: Some(ccd_bg.into()),
+            border: iced::Border {
+                radius: 6.0.into(),
+                width: 1.0,
+                color: ccd_border,
+            },
+            ..container::Style::default()
+        })
+        .into()
+}
+
+/// A single failure card with accent-coloured left border and error-type badge.
+fn build_failure_card<'a>(core: &'a ModalCoreResult, is_dark: bool) -> Element<'a, Message> {
+    let (accent, card_bg, badge_bg, badge_text) = match (core.error_category, is_dark) {
+        (ErrorCategory::Mprime, true) => (
+            gui_theme::DARK_ERROR_BORDER,
+            gui_theme::DARK_ERROR_BG,
+            gui_theme::DARK_ERROR_BADGE_BG,
+            gui_theme::DARK_ERROR_BADGE_TEXT,
+        ),
+        (ErrorCategory::Mprime, false) => (
+            gui_theme::LIGHT_ERROR_BORDER,
+            gui_theme::LIGHT_ERROR_BG,
+            gui_theme::LIGHT_ERROR_BADGE_BG,
+            gui_theme::LIGHT_ERROR_BADGE_TEXT,
+        ),
+        (ErrorCategory::MceOnly, true) => (
+            gui_theme::DARK_MCE_BORDER,
+            gui_theme::DARK_MCE_BG,
+            gui_theme::DARK_MCE_BADGE_BG,
+            gui_theme::DARK_MCE_BADGE_TEXT,
+        ),
+        (ErrorCategory::MceOnly, false) => (
+            gui_theme::LIGHT_MCE_BORDER,
+            gui_theme::LIGHT_MCE_BG,
+            gui_theme::LIGHT_MCE_BADGE_BG,
+            gui_theme::LIGHT_MCE_BADGE_TEXT,
+        ),
+    };
+
+    let text_primary = if is_dark {
+        gui_theme::DARK_TEXT_PRIMARY
+    } else {
+        gui_theme::LIGHT_TEXT_PRIMARY
+    };
+    let text_muted = if is_dark {
+        gui_theme::DARK_TEXT_MUTED
+    } else {
+        gui_theme::LIGHT_TEXT_MUTED
+    };
+
+    let core_label = text(format!("Core {}", core.bios_index))
+        .size(13)
+        .color(text_primary);
+    let separator = text("\u{00B7}").size(13).color(text_muted); // ·
+    let badge = container(text(&core.error_summary).size(11).color(badge_text))
+        .padding(Padding::from([2, 8]))
+        .style(move |_theme| container::Style {
+            background: Some(badge_bg.into()),
+            border: iced::Border {
+                radius: 3.0.into(),
+                ..Default::default()
+            },
+            ..container::Style::default()
+        });
+
+    // 3 px accent stripe matching the inner row height (13 px text + 8*2 padding ≈ 32 px)
+    let accent_bar = container(row![])
+        .width(3)
+        .height(Length::Fixed(32.0))
+        .style(move |_theme| container::Style {
+            background: Some(accent.into()),
+            ..container::Style::default()
+        });
+
+    container(row![
+        accent_bar,
+        row![
+            core_label,
+            Space::new().width(6),
+            separator,
+            Space::new().width(6),
+            badge
+        ]
+        .padding(Padding::from([8, 12]))
+        .align_y(iced::Alignment::Center),
+    ])
+    .style(move |_theme| container::Style {
+        background: Some(card_bg.into()),
+        border: iced::Border {
+            radius: 4.0.into(),
+            ..Default::default()
+        },
+        ..container::Style::default()
+    })
+    .into()
+}
+
+/// Stable core pills row.
+fn build_stable_chips<'a>(indices: &[u32], is_dark: bool) -> Element<'a, Message> {
+    let chip_bg = if is_dark {
+        gui_theme::DARK_CHIP_BG
+    } else {
+        gui_theme::LIGHT_CHIP_BG
+    };
+    let chip_text = if is_dark {
+        gui_theme::DARK_CHIP_TEXT
+    } else {
+        gui_theme::LIGHT_CHIP_TEXT
+    };
+
+    let section_header = if is_dark {
+        gui_theme::DARK_SECTION_HEADER
+    } else {
+        gui_theme::LIGHT_SECTION_HEADER
+    };
+
+    let header = text(format!("Stable Cores ({})", indices.len()))
+        .size(12)
+        .color(section_header);
+
+    let mut chips_row = row![].spacing(4);
+    for idx in indices {
+        let chip = container(text(format!("{idx}")).size(12).color(chip_text))
+            .padding(Padding::from([2, 8]))
+            .style(move |_theme| container::Style {
+                background: Some(chip_bg.into()),
+                border: iced::Border {
+                    radius: 10.0.into(),
+                    ..Default::default()
+                },
+                ..container::Style::default()
+            });
+        chips_row = chips_row.push(chip);
+    }
+
+    column![header, chips_row].spacing(4).into()
+}
+
+
+/// Numbered next-steps guide rendered beside the QR code.
+fn build_next_steps<'a>(is_dark: bool) -> Element<'a, Message> {
+    let text_color = if is_dark {
+        gui_theme::DARK_TEXT_SECONDARY
+    } else {
+        gui_theme::LIGHT_TEXT_SECONDARY
+    };
+
+    let steps = [
+        "Note unstable core numbers above",
+        "Reboot to BIOS \u{2192} Curve Optimizer",
+        "Increase CO offset for listed cores",
+        "Re-run core-probe to verify",
+    ];
+
+    let header = text("Next steps:").size(13).color(text_color);
+    let mut list = column![header].spacing(3);
+    for (i, step) in steps.iter().enumerate() {
+        let line = text(format!("{}. {step}", i + 1))
+            .size(12)
+            .color(text_color);
+        list = list.push(line);
+    }
+
+    list.into()
+}
+
+/// Duration + iterations footer line.
+fn build_modal_footer<'a>(
+    duration: Duration,
+    iterations: u32,
+    is_dark: bool,
+) -> Element<'a, Message> {
+    let color = if is_dark {
+        gui_theme::DARK_TEXT_MUTED
+    } else {
+        gui_theme::LIGHT_TEXT_MUTED
+    };
+    text(format!(
+        "Duration: {} \u{00B7} Iterations: {iterations}",
+        format_duration(duration)
+    ))
+    .size(12)
+    .color(color)
+    .into()
 }
 
 // ---------------------------------------------------------------------------

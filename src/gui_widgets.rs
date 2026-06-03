@@ -635,9 +635,7 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
             .style(|_theme: &iced::Theme| container::Style::default());
 
             let thermal_row = row![
-                text(temp_str.0)
-                    .size(12)
-                    .color(temp_str.1),
+                text(temp_str.0).size(12).color(temp_str.1),
                 Space::new().width(Length::Fill),
                 freq_display,
             ]

@@ -4,7 +4,6 @@ version = "0.0.0"
 edition = "2021"
 
 [dependencies]
-argh = "0.1"
 anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time", "local-time"] }
@@ -19,6 +18,9 @@ iced = { version = "0.14", features = ["tokio"] }
 iced_anim = "0.3"
 time = { version = "0.3", features = ["local-offset"] }
 fast_qr = { version = "0.13", default-features = false }
+tokio = { version = "1", default-features = false, features = ["sync", "time", "rt"] }
+semver = "1.0"
+self_update = { version = "0.44", features = ["ureq", "rustls", "archive-tar", "archive-zip", "compression-flate2", "compression-zip-deflate"], default-features = false }
 
 [profile.release]
 strip = true

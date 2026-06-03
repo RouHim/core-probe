@@ -205,6 +205,15 @@ pub const LIGHT_CARD_BORDER: Color = Color::from_rgb(
 );
 
 // ---------------------------------------------------------------------------
+// Update modal colors
+// ---------------------------------------------------------------------------
+
+pub const DARK_UPDATE_MODAL_BG: Color = DARK_HEADER_BG;
+pub const DARK_UPDATE_MODAL_BORDER: Color = DARK_BORDER;
+pub const LIGHT_UPDATE_MODAL_BG: Color = LIGHT_HEADER_BG;
+pub const LIGHT_UPDATE_MODAL_BORDER: Color = LIGHT_BORDER;
+
+// ---------------------------------------------------------------------------
 // CCD container colors
 // ---------------------------------------------------------------------------
 
@@ -545,6 +554,154 @@ const LIGHT_LOG_DEFAULT: Color = Color::from_rgb(
     0x42 as f32 / 255.0,
     0x42 as f32 / 255.0,
     0x42 as f32 / 255.0,
+);
+
+// ---------------------------------------------------------------------------
+// Modal failure-card colors (dark)
+// ---------------------------------------------------------------------------
+
+pub const DARK_ERROR_BG: Color = Color::from_rgb(
+    0x4a as f32 / 255.0,
+    0x15 as f32 / 255.0,
+    0x15 as f32 / 255.0,
+);
+pub const DARK_ERROR_BORDER: Color = Color::from_rgb(
+    0xcc as f32 / 255.0,
+    0x33 as f32 / 255.0,
+    0x33 as f32 / 255.0,
+);
+pub const DARK_ERROR_BADGE_BG: Color = Color::from_rgb(
+    0x8b as f32 / 255.0,
+    0x1a as f32 / 255.0,
+    0x1a as f32 / 255.0,
+);
+pub const DARK_ERROR_BADGE_TEXT: Color = Color::from_rgb(
+    0xff as f32 / 255.0,
+    0xcc as f32 / 255.0,
+    0xcc as f32 / 255.0,
+);
+
+pub const DARK_MCE_BG: Color = Color::from_rgb(
+    0x4a as f32 / 255.0,
+    0x35 as f32 / 255.0,
+    0x10 as f32 / 255.0,
+);
+pub const DARK_MCE_BORDER: Color = Color::from_rgb(
+    0xcc as f32 / 255.0,
+    0x88 as f32 / 255.0,
+    0x20 as f32 / 255.0,
+);
+pub const DARK_MCE_BADGE_BG: Color = Color::from_rgb(
+    0x8b as f32 / 255.0,
+    0x6d as f32 / 255.0,
+    0x10 as f32 / 255.0,
+);
+pub const DARK_MCE_BADGE_TEXT: Color = Color::from_rgb(
+    0xff as f32 / 255.0,
+    0xec as f32 / 255.0,
+    0xb3 as f32 / 255.0,
+);
+
+pub const DARK_CHIP_BG: Color = Color::from_rgb(
+    0x28 as f32 / 255.0,
+    0x3a as f32 / 255.0,
+    0x28 as f32 / 255.0,
+);
+pub const DARK_CHIP_TEXT: Color = Color::from_rgb(
+    0xc8 as f32 / 255.0,
+    0xe6 as f32 / 255.0,
+    0xc9 as f32 / 255.0,
+);
+
+pub const DARK_SECTION_HEADER: Color = Color::from_rgb(
+    0x70 as f32 / 255.0,
+    0x70 as f32 / 255.0,
+    0x85 as f32 / 255.0,
+);
+
+pub const DARK_COPY_FIELD_BG: Color = Color::from_rgb(
+    0x1a as f32 / 255.0,
+    0x1a as f32 / 255.0,
+    0x1a as f32 / 255.0,
+);
+pub const DARK_COPY_FIELD_BORDER: Color = Color::from_rgb(
+    0x44 as f32 / 255.0,
+    0x44 as f32 / 255.0,
+    0x44 as f32 / 255.0,
+);
+
+// ---------------------------------------------------------------------------
+// Modal failure-card colors (light)
+// ---------------------------------------------------------------------------
+
+pub const LIGHT_ERROR_BG: Color = Color::from_rgb(
+    0xff as f32 / 255.0,
+    0xf0 as f32 / 255.0,
+    0xf0 as f32 / 255.0,
+);
+pub const LIGHT_ERROR_BORDER: Color = Color::from_rgb(
+    0xe5 as f32 / 255.0,
+    0x73 as f32 / 255.0,
+    0x73 as f32 / 255.0,
+);
+pub const LIGHT_ERROR_BADGE_BG: Color = Color::from_rgb(
+    0xff as f32 / 255.0,
+    0xcd as f32 / 255.0,
+    0xd2 as f32 / 255.0,
+);
+pub const LIGHT_ERROR_BADGE_TEXT: Color = Color::from_rgb(
+    0xb7 as f32 / 255.0,
+    0x1c as f32 / 255.0,
+    0x1c as f32 / 255.0,
+);
+
+pub const LIGHT_MCE_BG: Color = Color::from_rgb(
+    0xff as f32 / 255.0,
+    0xf8 as f32 / 255.0,
+    0xe1 as f32 / 255.0,
+);
+pub const LIGHT_MCE_BORDER: Color = Color::from_rgb(
+    0xff as f32 / 255.0,
+    0xcc as f32 / 255.0,
+    0x40 as f32 / 255.0,
+);
+pub const LIGHT_MCE_BADGE_BG: Color = Color::from_rgb(
+    0xff as f32 / 255.0,
+    0xe0 as f32 / 255.0,
+    0x8c as f32 / 255.0,
+);
+pub const LIGHT_MCE_BADGE_TEXT: Color = Color::from_rgb(
+    0x8d as f32 / 255.0,
+    0x5f as f32 / 255.0,
+    0x00 as f32 / 255.0,
+);
+
+pub const LIGHT_CHIP_BG: Color = Color::from_rgb(
+    0xc8 as f32 / 255.0,
+    0xe6 as f32 / 255.0,
+    0xc9 as f32 / 255.0,
+);
+pub const LIGHT_CHIP_TEXT: Color = Color::from_rgb(
+    0x1b as f32 / 255.0,
+    0x5e as f32 / 255.0,
+    0x20 as f32 / 255.0,
+);
+
+pub const LIGHT_SECTION_HEADER: Color = Color::from_rgb(
+    0x60 as f32 / 255.0,
+    0x60 as f32 / 255.0,
+    0x70 as f32 / 255.0,
+);
+
+pub const LIGHT_COPY_FIELD_BG: Color = Color::from_rgb(
+    0xf0 as f32 / 255.0,
+    0xf0 as f32 / 255.0,
+    0xf0 as f32 / 255.0,
+);
+pub const LIGHT_COPY_FIELD_BORDER: Color = Color::from_rgb(
+    0xcc as f32 / 255.0,
+    0xcc as f32 / 255.0,
+    0xcc as f32 / 255.0,
 );
 
 // ---------------------------------------------------------------------------

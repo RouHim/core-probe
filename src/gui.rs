@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::os::unix::process::CommandExt;
 use std::sync::mpsc::TryRecvError;
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -19,11 +20,13 @@ use crate::gui_events::{create_event_channel, EventReceiver, LogLevel, TestEvent
 use crate::gui_modal;
 use crate::gui_qr;
 use crate::gui_theme::{dark_theme, detect_system_theme, light_theme, ThemeMode};
+use crate::gui_update_modal::{self, AppUpdateState};
 use crate::gui_widgets;
 use crate::mce_monitor::{MceError, MceErrorType};
 use crate::mprime_config::StressTestMode;
 use crate::signal_handler;
 use crate::uefi_reader::UefiSettings;
+use crate::updater::ReleaseInfo;
 
 #[derive(Debug, Clone)]
 pub struct LogEntry {
@@ -72,11 +75,21 @@ pub struct CoreResultInfo {
     pub iterations_completed: u32,
 }
 
+/// Categorises a core failure for visual styling in the modal report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorCategory {
+    /// At least one mprime-level error (ROUNDOFF, FATAL, etc.).
+    Mprime,
+    /// Only machine-check / EDAC errors; no mprime errors.
+    MceOnly,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModalCoreResult {
     pub bios_index: u32,
     pub error_summary: String,
     pub ccd_index: u32,
+    pub error_category: ErrorCategory,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,6 +121,10 @@ pub enum Message {
     DismissError,
     DismissModal,
     RebootToFirmware,
+    AppUpdateCheckCompleted(Option<ReleaseInfo>),
+    StartAppUpdate,
+    AppUpdateApplied(Result<(), String>),
+    CloseAppUpdateModal,
     FocusNext,
     FocusPrevious,
 }
@@ -135,6 +152,8 @@ pub struct CoreProbeApp {
     pub tctl: Option<f32>,
     pub core_temperatures: BTreeMap<u32, f32>,
     pub core_frequencies: BTreeMap<u32, u64>,
+    pub app_update_state: Option<AppUpdateState>,
+    pub pending_update: Option<ReleaseInfo>,
     pub core_freq_max: BTreeMap<u32, u64>,
     pub thermal_throttled_cores: BTreeSet<u32>,
 }
@@ -204,6 +223,8 @@ pub fn boot() -> (CoreProbeApp, Task<Message>) {
         core_frequencies: BTreeMap::new(),
         core_freq_max: BTreeMap::new(),
         thermal_throttled_cores: BTreeSet::new(),
+        app_update_state: None,
+        pending_update: None,
     };
 
     if let Some(topology) = app.topology.clone() {
@@ -219,9 +240,41 @@ pub fn boot() -> (CoreProbeApp, Task<Message>) {
         }
     }
 
-    (app, Task::none())
+    let update_task = if cfg!(debug_assertions) {
+        Task::none()
+    } else {
+        Task::perform(
+            async {
+                tokio::task::spawn_blocking(crate::updater::check_update_available)
+                    .await
+                    .unwrap_or_else(|e| {
+                        warn!("update check panicked or was cancelled: {e}");
+                        Ok(None)
+                    })
+                    .unwrap_or_else(|e| {
+                        warn!("update check failed: {e}");
+                        None
+                    })
+            },
+            Message::AppUpdateCheckCompleted,
+        )
+    };
+    (app, update_task)
 }
 
+/// If a pending update is waiting and it's safe to show the modal (no test
+/// running, no existing modal), promote it to `app_update_state`.
+fn try_show_pending_update(state: &mut CoreProbeApp) {
+    if state.pending_update.is_some() && !state.test_running && state.app_update_state.is_none() {
+        let release = state.pending_update.take().unwrap();
+        state.app_update_state = Some(AppUpdateState {
+            release,
+            phase: crate::gui_update_modal::AppUpdatePhase::Prompt,
+            status_message: None,
+            spinner_tick: 0,
+        });
+    }
+}
 pub fn update(state: &mut CoreProbeApp, message: Message) -> Task<Message> {
     match message {
         Message::StartTest => {
@@ -293,15 +346,8 @@ pub fn update(state: &mut CoreProbeApp, message: Message) -> Task<Message> {
             state.error_banner = None;
 
             std::thread::spawn(move || {
-                let coordinator = Coordinator::new(
-                    duration,
-                    iterations,
-                    core_filter,
-                    false,
-                    false,
-                    Some(sender),
-                    Some(mode),
-                );
+                let coordinator =
+                    Coordinator::new(duration, iterations, core_filter, Some(sender), Some(mode));
 
                 if let Err(error) = coordinator.run(&topology, &extracted) {
                     let _ = sender_for_errors.send(TestEvent::TestError {
@@ -334,6 +380,59 @@ pub fn update(state: &mut CoreProbeApp, message: Message) -> Task<Message> {
         Message::EventReceived(event) => {
             process_event(state, event);
         }
+        Message::AppUpdateCheckCompleted(result) => {
+            if let Some(release) = result {
+                state.pending_update = Some(release);
+                try_show_pending_update(state);
+            }
+        }
+        Message::StartAppUpdate => {
+            if let Some(ref mut s) = state.app_update_state {
+                if s.phase != crate::gui_update_modal::AppUpdatePhase::Prompt {
+                    return Task::none();
+                }
+                s.phase = crate::gui_update_modal::AppUpdatePhase::Updating;
+                s.spinner_tick = 0;
+                return Task::perform(
+                    async {
+                        tokio::task::spawn_blocking(crate::updater::apply_update)
+                            .await
+                            .unwrap_or_else(|e| Err(format!("update install panicked: {e}")))
+                    },
+                    Message::AppUpdateApplied,
+                );
+            }
+            return Task::none();
+        }
+        Message::AppUpdateApplied(result) => {
+            if let Some(ref mut s) = state.app_update_state {
+                match result {
+                    Ok(()) => {
+                        s.phase = crate::gui_update_modal::AppUpdatePhase::Completed;
+                        // Delay then restart by replacing the current process.
+                        let _ = state; // capture for closure
+                        return Task::perform(
+                            async {
+                                tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                            },
+                            |_| {
+                                let exe = std::env::current_exe().unwrap_or_default();
+                                let _ = std::process::Command::new(exe).exec();
+                                Message::CloseAppUpdateModal
+                            },
+                        );
+                    }
+                    Err(e) => {
+                        s.phase = crate::gui_update_modal::AppUpdatePhase::Failed;
+                        s.status_message = Some(e);
+                    }
+                }
+            }
+        }
+        Message::CloseAppUpdateModal => {
+            state.app_update_state = None;
+            try_show_pending_update(state);
+        }
         Message::Tick => {
             let mut drained = Vec::new();
             let mut disconnected = false;
@@ -364,6 +463,12 @@ pub fn update(state: &mut CoreProbeApp, message: Message) -> Task<Message> {
                 if let Some(&latest) = history.back() {
                     let smoothed = state.core_load_smoothed.entry(phys_id).or_insert(latest);
                     *smoothed += (latest - *smoothed) * 0.2;
+                }
+            }
+            // Increment update modal spinner if updating.
+            if let Some(ref mut s) = state.app_update_state {
+                if s.phase == crate::gui_update_modal::AppUpdatePhase::Updating {
+                    s.spinner_tick = s.spinner_tick.wrapping_add(1);
                 }
             }
         }
@@ -488,8 +593,14 @@ pub fn view(state: &CoreProbeApp) -> Element<'_, Message> {
 
         main_col = column![error_banner, main_col].spacing(8);
     }
-
-    if let Some(content) = &state.modal_content {
+    if let Some(ref update_state) = state.app_update_state {
+        let base: Element<'_, Message> = if let Some(content) = &state.modal_content {
+            gui_modal::modal_overlay_view(main_col.into(), content, is_dark)
+        } else {
+            main_col.into()
+        };
+        gui_update_modal::render_app_update_modal(base, update_state, is_dark)
+    } else if let Some(content) = &state.modal_content {
         gui_modal::modal_overlay_view(main_col.into(), content, is_dark)
     } else {
         main_col.into()
@@ -497,7 +608,32 @@ pub fn view(state: &CoreProbeApp) -> Element<'_, Message> {
 }
 
 pub fn subscription(state: &CoreProbeApp) -> Subscription<Message> {
-    let keyboard_subscription = if state.modal_content.is_some() {
+    let has_update_modal = state.app_update_state.is_some();
+    let has_result_modal = state.modal_content.is_some();
+    let keyboard_subscription = if has_update_modal {
+        iced::event::listen_with(|event, _status, _window| match event {
+            iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(key::Named::Escape),
+                ..
+            }) => Some(Message::CloseAppUpdateModal),
+            iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(key::Named::Enter),
+                ..
+            }) => Some(Message::StartAppUpdate),
+            iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(key::Named::Tab),
+                modifiers,
+                ..
+            }) => {
+                if modifiers.shift() {
+                    Some(Message::FocusPrevious)
+                } else {
+                    Some(Message::FocusNext)
+                }
+            }
+            _ => None,
+        })
+    } else if has_result_modal {
         iced::event::listen_with(|event, _status, _window| match event {
             iced::Event::Keyboard(keyboard::Event::KeyPressed {
                 key: keyboard::Key::Named(key::Named::Tab),
@@ -536,7 +672,6 @@ pub fn subscription(state: &CoreProbeApp) -> Subscription<Message> {
             _ => None,
         })
     };
-
     Subscription::batch([
         iced::time::every(Duration::from_millis(16)).map(|_| Message::Tick),
         keyboard_subscription,
@@ -815,7 +950,7 @@ pub fn build_modal_content(
             continue;
         }
 
-        let mut error_summary = build_error_summary(result);
+        let (mut error_summary, error_category) = build_error_summary(result);
         if topology.is_none() {
             error_summary.push_str(" (physical ID)");
         }
@@ -824,6 +959,7 @@ pub fn build_modal_content(
             bios_index,
             error_summary,
             ccd_index: derive_ccd_index(topology, physical_core_id),
+            error_category,
         });
     }
 
@@ -872,18 +1008,21 @@ fn derive_ccd_index(topology: Option<&CpuTopology>, physical_core_id: u32) -> u3
     0
 }
 
-fn build_error_summary(result: &CoreResultInfo) -> String {
-    gui_widgets::format_error_summary(&result.mprime_errors)
-        .or_else(|| {
-            result.mce_errors.first().map(|mce| match mce.error_type {
-                MceErrorType::MachineCheck => String::from("MCE"),
-                MceErrorType::HardwareError => String::from("HW ERROR"),
-                MceErrorType::EdacCorrectable => String::from("EDAC CORR"),
-                MceErrorType::EdacUncorrectable => String::from("EDAC UNCORR"),
-                MceErrorType::Unknown => String::from("MCE ERROR"),
-            })
-        })
-        .unwrap_or_else(|| String::from("ERROR"))
+fn build_error_summary(result: &CoreResultInfo) -> (String, ErrorCategory) {
+    if let Some(summary) = gui_widgets::format_error_summary(&result.mprime_errors) {
+        return (summary, ErrorCategory::Mprime);
+    }
+    if let Some(mce) = result.mce_errors.first() {
+        let summary = match mce.error_type {
+            MceErrorType::MachineCheck => String::from("MCE"),
+            MceErrorType::HardwareError => String::from("HW ERROR"),
+            MceErrorType::EdacCorrectable => String::from("EDAC CORR"),
+            MceErrorType::EdacUncorrectable => String::from("EDAC UNCORR"),
+            MceErrorType::Unknown => String::from("MCE ERROR"),
+        };
+        return (summary, ErrorCategory::MceOnly);
+    }
+    (String::from("ERROR"), ErrorCategory::Mprime)
 }
 
 fn append_log(state: &mut CoreProbeApp, level: LogLevel, message: String) {
@@ -1069,6 +1208,8 @@ mod tests {
             core_frequencies: BTreeMap::new(),
             core_freq_max: BTreeMap::new(),
             thermal_throttled_cores: BTreeSet::new(),
+            app_update_state: None,
+            pending_update: None,
         }
     }
 
