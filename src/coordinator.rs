@@ -66,6 +66,9 @@ pub struct CycleResults {
     pub total_duration: Duration,
     pub iterations_completed: u32,
     pub interrupted: bool,
+    /// System-level MCE/EDAC events collected during the run (data fabric,
+    /// memory controller, shared L3, ...). Never attributed to a core.
+    pub system_mce_errors: Vec<MceError>,
 }
 
 pub struct Coordinator {
@@ -126,6 +129,7 @@ trait MceControl {
     fn start(&mut self, topology: &CpuTopology) -> Result<()>;
     fn stop(&mut self);
     fn get_errors_for_core(&self, core_id: u32) -> Vec<MceError>;
+    fn get_system_errors(&self) -> Vec<MceError>;
 }
 
 impl MceControl for MceMonitor {
@@ -139,6 +143,10 @@ impl MceControl for MceMonitor {
 
     fn get_errors_for_core(&self, core_id: u32) -> Vec<MceError> {
         MceMonitor::get_errors_for_core(self, core_id)
+    }
+
+    fn get_system_errors(&self) -> Vec<MceError> {
+        MceMonitor::get_system_errors(self)
     }
 }
 
@@ -226,6 +234,8 @@ impl Coordinator {
         let mut interrupted = false;
         let mut completed_iterations = 0;
         let mut failed_cores: BTreeSet<u32> = BTreeSet::new();
+        let mut system_mce_errors = Vec::new();
+        let mut seen_system_mce_count = 0;
 
         'iterations: for iteration in 0..self.iteration_count {
             let iteration_span = info_span!("iteration", iteration = iteration + 1);
@@ -268,6 +278,8 @@ impl Coordinator {
                     parser,
                     monitor,
                     &hooks,
+                    &mut seen_system_mce_count,
+                    &mut system_mce_errors,
                 )?;
 
                 if result.status == CoreStatus::Interrupted {
@@ -305,6 +317,7 @@ impl Coordinator {
             total_duration: start_time.elapsed(),
             iterations_completed: completed_iterations,
             interrupted,
+            system_mce_errors,
         };
         self.emit_event(TestEvent::TestCompleted {
             results: cycle_results.clone(),
@@ -324,6 +337,8 @@ impl Coordinator {
         parser: &mut P,
         monitor: &M,
         hooks: &PollHooks<'_, ShutdownFn, SleepFn>,
+        seen_system_mce_count: &mut usize,
+        system_mce_errors: &mut Vec<MceError>,
     ) -> Result<CoreTestResult>
     where
         R: RunnerControl,
@@ -430,7 +445,7 @@ impl Coordinator {
                     }
                 }
 
-                collect_new_errors(
+                self.collect_and_emit_errors(
                     core_id,
                     &working_dir,
                     parser,
@@ -438,6 +453,8 @@ impl Coordinator {
                     &mut seen_mce_count,
                     &mut mprime_errors,
                     &mut mce_errors,
+                    seen_system_mce_count,
+                    system_mce_errors,
                 )?;
 
                 if !mprime_errors.is_empty() || !mce_errors.is_empty() {
@@ -476,7 +493,7 @@ impl Coordinator {
                 .with_context(|| format!("failed to check mprime liveness for core {core_id}"))?
             {
                 warn!(core_id, "mprime exited before requested duration");
-                collect_new_errors(
+                self.collect_and_emit_errors(
                     core_id,
                     &working_dir,
                     parser,
@@ -484,6 +501,8 @@ impl Coordinator {
                     &mut seen_mce_count,
                     &mut mprime_errors,
                     &mut mce_errors,
+                    seen_system_mce_count,
+                    system_mce_errors,
                 )?;
 
                 if mprime_errors.is_empty() && mce_errors.is_empty() {
@@ -617,7 +636,7 @@ impl Coordinator {
             .stop()
             .context("failed to stop mprime after core duration completed")?;
 
-        collect_new_errors(
+        self.collect_and_emit_errors(
             core_id,
             &working_dir,
             parser,
@@ -625,6 +644,8 @@ impl Coordinator {
             &mut seen_mce_count,
             &mut mprime_errors,
             &mut mce_errors,
+            seen_system_mce_count,
+            system_mce_errors,
         )?;
 
         let status = if mprime_errors.is_empty() && mce_errors.is_empty() {
@@ -646,6 +667,61 @@ impl Coordinator {
             freq_max_khz,
             cooldown_count,
         })
+    }
+
+    /// Poll for new mprime/MCE errors and surface newly-arrived system-level
+    /// MCE events in the log. System-level events never fail a core.
+    #[allow(clippy::too_many_arguments)]
+    fn collect_and_emit_errors<P, M>(
+        &self,
+        core_id: u32,
+        working_dir: &Path,
+        parser: &mut P,
+        monitor: &M,
+        seen_mce_count: &mut usize,
+        mprime_errors: &mut Vec<MprimeError>,
+        mce_errors: &mut Vec<MceError>,
+        seen_system_mce_count: &mut usize,
+        system_mce_errors: &mut Vec<MceError>,
+    ) -> Result<()>
+    where
+        P: ErrorParseControl,
+        M: MceControl,
+    {
+        let system_before = system_mce_errors.len();
+        collect_new_errors(
+            core_id,
+            working_dir,
+            parser,
+            monitor,
+            seen_mce_count,
+            mprime_errors,
+            mce_errors,
+            seen_system_mce_count,
+            system_mce_errors,
+        )?;
+
+        for error in &system_mce_errors[system_before..] {
+            let bank = error
+                .bank
+                .map_or_else(|| "?".to_string(), |bank| bank.to_string());
+            let error_type = match error.error_type {
+                crate::mce_monitor::MceErrorType::MachineCheck => "Machine Check",
+                crate::mce_monitor::MceErrorType::HardwareError => "Hardware Error",
+                crate::mce_monitor::MceErrorType::EdacCorrectable => "EDAC correctable",
+                crate::mce_monitor::MceErrorType::EdacUncorrectable => "EDAC uncorrectable",
+                crate::mce_monitor::MceErrorType::Unknown => "Unknown",
+            };
+            self.emit_event(TestEvent::LogMessage {
+                level: LogLevel::Mce,
+                message: format!(
+                    "  System MCE \u{2014} Bank {} {} {} (not attributed to any core)",
+                    bank, error_type, error.timestamp
+                ),
+            });
+        }
+
+        Ok(())
     }
 
     fn emit_event(&self, event: TestEvent) {
@@ -720,6 +796,9 @@ fn ordered_cores_for_run(topology: &CpuTopology, core_filter: Option<&Vec<u32>>)
     order_cores_alternate(&topology.core_map)
 }
 
+/// Collect newly-arrived mprime and MCE errors for one core. System-level
+/// MCE events are appended to `system_mce_errors`, never to `mce_errors`.
+#[allow(clippy::too_many_arguments)]
 fn collect_new_errors<P, M>(
     core_id: u32,
     working_dir: &Path,
@@ -728,6 +807,8 @@ fn collect_new_errors<P, M>(
     seen_mce_count: &mut usize,
     mprime_errors: &mut Vec<MprimeError>,
     mce_errors: &mut Vec<MceError>,
+    seen_system_mce_count: &mut usize,
+    system_mce_errors: &mut Vec<MceError>,
 ) -> Result<()>
 where
     P: ErrorParseControl,
@@ -748,6 +829,16 @@ where
     if latest_core_errors.len() > *seen_mce_count {
         mce_errors.extend(latest_core_errors[*seen_mce_count..].iter().cloned());
         *seen_mce_count = latest_core_errors.len();
+    }
+
+    let latest_system_errors = monitor.get_system_errors();
+    if latest_system_errors.len() > *seen_system_mce_count {
+        system_mce_errors.extend(
+            latest_system_errors[*seen_system_mce_count..]
+                .iter()
+                .cloned(),
+        );
+        *seen_system_mce_count = latest_system_errors.len();
     }
 
     Ok(())
@@ -790,7 +881,7 @@ fn format_intermediate_result(result: &CoreTestResult) -> Option<String> {
 
 /// Build a compact one-line error summary for a failed core result.
 /// Prioritizes the first mprime error, then the first MCE error.
-fn format_error_summary(result: &CoreTestResult) -> String {
+pub(crate) fn format_error_summary(result: &CoreTestResult) -> String {
     if let Some(error) = result.mprime_errors.first() {
         let error_type = match error.error_type {
             MprimeErrorType::RoundoffError => "ROUNDOFF",
@@ -1035,6 +1126,7 @@ mod tests {
                 message: "mce test".to_string(),
                 timestamp: "0".to_string(),
                 apic_id: None,
+                system_level: false,
             },
         );
 
@@ -1102,6 +1194,7 @@ mod tests {
                 message: "MCE bank 3".to_string(),
                 timestamp: "0".to_string(),
                 apic_id: None,
+                system_level: false,
             },
         );
 
@@ -1298,11 +1391,16 @@ mod tests {
     #[derive(Default)]
     struct FakeMceMonitor {
         errors_by_core: HashMap<u32, Vec<MceError>>,
+        system_errors: Vec<MceError>,
     }
 
     impl FakeMceMonitor {
         fn push_error(&mut self, core_id: u32, error: MceError) {
             self.errors_by_core.entry(core_id).or_default().push(error);
+        }
+
+        fn push_system_error(&mut self, error: MceError) {
+            self.system_errors.push(error);
         }
     }
 
@@ -1318,6 +1416,10 @@ mod tests {
                 .get(&core_id)
                 .cloned()
                 .unwrap_or_default()
+        }
+
+        fn get_system_errors(&self) -> Vec<MceError> {
+            self.system_errors.clone()
         }
     }
 
@@ -1368,6 +1470,10 @@ mod tests {
         }
 
         fn get_errors_for_core(&self, _core_id: u32) -> Vec<MceError> {
+            Vec::new()
+        }
+
+        fn get_system_errors(&self) -> Vec<MceError> {
             Vec::new()
         }
     }
@@ -1714,6 +1820,89 @@ mod tests {
         }
         // Core 0 was only started once, core 1 was started 3 times
         assert_eq!(runner.start_order, vec![0, 1, 1, 1]);
+        Ok(())
+    }
+
+    #[test]
+    fn given_system_mce_when_testing_core_then_core_passes_and_system_event_collected() -> Result<()>
+    {
+        // GIVEN: One core and a data-fabric (bank 27) MCE arrives
+        let fixture = TestFixture::new(&[(0, vec![0])])?;
+        let coordinator = Coordinator::new(Duration::from_secs(1), 1, None, None, None);
+        let mut runner = FakeRunner::default();
+        let mut parser = FakeParser::default();
+        let mut monitor = FakeMceMonitor::default();
+
+        monitor.push_system_error(MceError {
+            cpu_id: 0,
+            bank: Some(27),
+            error_type: MceErrorType::MachineCheck,
+            message: "data fabric MCE".to_string(),
+            timestamp: "11:36:33".to_string(),
+            apic_id: None,
+            system_level: true,
+        });
+
+        // WHEN: Running the cycle
+        let results = coordinator.run_with_components(
+            &fixture.topology,
+            &fixture.extracted,
+            &mut runner,
+            &mut parser,
+            &mut monitor,
+            PollHooks {
+                is_shutdown_requested: &|| false,
+                sleep_fn: &|_| {},
+            },
+        )?;
+
+        // THEN: The core passes and the system event is collected separately
+        assert_eq!(results.results[0].status, CoreStatus::Passed);
+        assert!(results.results[0].mce_errors.is_empty());
+        assert_eq!(results.system_mce_errors.len(), 1);
+        assert_eq!(results.system_mce_errors[0].bank, Some(27));
+        Ok(())
+    }
+
+    #[test]
+    fn given_core_local_mce_when_testing_core_then_core_fails() -> Result<()> {
+        // GIVEN: One core and a core-local (bank 2) MCE arrives
+        let fixture = TestFixture::new(&[(0, vec![0])])?;
+        let coordinator = Coordinator::new(Duration::from_secs(1), 1, None, None, None);
+        let mut runner = FakeRunner::default();
+        let mut parser = FakeParser::default();
+        let mut monitor = FakeMceMonitor::default();
+
+        monitor.push_error(
+            0,
+            MceError {
+                cpu_id: 0,
+                bank: Some(2),
+                error_type: MceErrorType::MachineCheck,
+                message: "core-local MCE".to_string(),
+                timestamp: "0".to_string(),
+                apic_id: None,
+                system_level: false,
+            },
+        );
+
+        // WHEN: Running the cycle
+        let results = coordinator.run_with_components(
+            &fixture.topology,
+            &fixture.extracted,
+            &mut runner,
+            &mut parser,
+            &mut monitor,
+            PollHooks {
+                is_shutdown_requested: &|| false,
+                sleep_fn: &|_| {},
+            },
+        )?;
+
+        // THEN: The core fails with the MCE attributed to it
+        assert_eq!(results.results[0].status, CoreStatus::Failed);
+        assert_eq!(results.results[0].mce_errors.len(), 1);
+        assert!(results.system_mce_errors.is_empty());
         Ok(())
     }
 }

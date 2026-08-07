@@ -8,6 +8,7 @@ use iced::{Color, Element, Length, Padding};
 
 use crate::gui::{ErrorCategory, Message, ModalContent, ModalCoreResult};
 use crate::gui_theme;
+use crate::mce_monitor::MceError;
 
 /// Public entry point for the modal overlay. Callers pass the base UI element,
 /// the test-result content, and the current theme flag. The backdrop dismiss
@@ -38,7 +39,9 @@ fn modal<'a>(
                     background: Some(
                         Color {
                             a: 0.8,
-                            ..Color::BLACK
+                            r: 0.05,
+                            g: 0.06,
+                            b: 0.07,
                         }
                         .into(),
                     ),
@@ -85,9 +88,9 @@ fn build_result_card<'a>(content: &'a ModalContent, is_dark: bool) -> Element<'a
     let has_unstable = !content.unstable_cores.is_empty();
 
     let title_str = match (content.interrupted, has_unstable) {
-        (true, true) => "TEST INTERRUPTED \u{2014} UNSTABLE CORES FOUND",
+        (true, true) => "TEST INTERRUPTED - UNSTABLE CORES FOUND",
         (true, false) => "TEST INTERRUPTED",
-        (false, true) => "TEST COMPLETE \u{2014} UNSTABLE CORES FOUND",
+        (false, true) => "TEST COMPLETE - UNSTABLE CORES FOUND",
         (false, false) => "TEST COMPLETE",
     };
     let title = text(title_str).size(20).color(text_primary);
@@ -131,6 +134,14 @@ fn build_result_card<'a>(content: &'a ModalContent, is_dark: bool) -> Element<'a
         .align_y(iced::Alignment::Start)
         .into();
     body = body.push(qr_row);
+
+    // ── System MCE events (informational, never attributed to a core) ──
+    if !content.system_mce_errors.is_empty() {
+        body = body.push(build_system_mce_section(
+            &content.system_mce_errors,
+            is_dark,
+        ));
+    }
 
     // ── Footer stats ──
     body = body.push(build_modal_footer(
@@ -226,6 +237,7 @@ fn build_summary_bar<'a>(
 
     let inline_input: Element<'a, Message> = text_input("", &comma_list)
         .size(12)
+        .font(iced::font::Font::MONOSPACE)
         .width(Length::Shrink)
         .padding(Padding::from([2, 4]))
         .style(move |_theme, _status| text_input::Style {
@@ -243,7 +255,8 @@ fn build_summary_bar<'a>(
         Space::new().width(4),
         text(format!("{unstable_count} UNSTABLE"))
             .color(text_color)
-            .size(14),
+            .size(14)
+            .font(iced::font::Font::MONOSPACE),
         Space::new().width(4),
         text("[").color(text_color).size(13),
         inline_input,
@@ -253,7 +266,8 @@ fn build_summary_bar<'a>(
         Space::new().width(4),
         text(format!("{stable_count} STABLE"))
             .color(text_color)
-            .size(14),
+            .size(14)
+            .font(iced::font::Font::MONOSPACE),
     ]
     .into()
 }
@@ -350,7 +364,7 @@ fn build_failure_card<'a>(core: &'a ModalCoreResult, is_dark: bool) -> Element<'
         .style(move |_theme| container::Style {
             background: Some(badge_bg.into()),
             border: iced::Border {
-                radius: 3.0.into(),
+                radius: 10.0.into(),
                 ..Default::default()
             },
             ..container::Style::default()
@@ -380,7 +394,7 @@ fn build_failure_card<'a>(core: &'a ModalCoreResult, is_dark: bool) -> Element<'
     .style(move |_theme| container::Style {
         background: Some(card_bg.into()),
         border: iced::Border {
-            radius: 4.0.into(),
+            radius: 6.0.into(),
             ..Default::default()
         },
         ..container::Style::default()
@@ -429,6 +443,66 @@ fn build_stable_chips<'a>(indices: &[u32], is_dark: bool) -> Element<'a, Message
     column![header, chips_row].spacing(4).into()
 }
 
+/// Compact informational section for system-level MCE events (data fabric,
+/// memory controller, shared L3, ...). These never fail a core; the section
+/// is rendered only when such events were collected during the run.
+fn build_system_mce_section<'a>(errors: &[MceError], is_dark: bool) -> Element<'a, Message> {
+    let section_bg = if is_dark {
+        gui_theme::DARK_MCE_BG
+    } else {
+        gui_theme::LIGHT_MCE_BG
+    };
+    let section_border = if is_dark {
+        gui_theme::DARK_MCE_BORDER
+    } else {
+        gui_theme::LIGHT_MCE_BORDER
+    };
+    let text_muted = if is_dark {
+        gui_theme::DARK_TEXT_MUTED
+    } else {
+        gui_theme::LIGHT_TEXT_MUTED
+    };
+
+    let header = text("System MCE events (not attributed to any core)")
+        .size(12)
+        .color(text_muted);
+
+    let mut rows = column![].spacing(2);
+    for error in errors {
+        let bank = error
+            .bank
+            .map_or_else(|| "?".to_string(), |bank| bank.to_string());
+        let label = match error.error_type {
+            crate::mce_monitor::MceErrorType::MachineCheck => "Machine Check",
+            crate::mce_monitor::MceErrorType::HardwareError => "Hardware Error",
+            crate::mce_monitor::MceErrorType::EdacCorrectable => "EDAC correctable",
+            crate::mce_monitor::MceErrorType::EdacUncorrectable => "EDAC uncorrectable",
+            crate::mce_monitor::MceErrorType::Unknown => "Unknown",
+        };
+        rows = rows.push(
+            text(format!(
+                "Bank {bank} \u{00B7} {label} \u{00B7} {}",
+                error.timestamp
+            ))
+            .size(11)
+            .color(text_muted),
+        );
+    }
+
+    container(column![header, rows].spacing(4))
+        .padding(10)
+        .width(Length::Fill)
+        .style(move |_theme| container::Style {
+            background: Some(section_bg.into()),
+            border: iced::Border {
+                radius: 6.0.into(),
+                width: 1.0,
+                color: section_border,
+            },
+            ..container::Style::default()
+        })
+        .into()
+}
 
 /// Numbered next-steps guide rendered beside the QR code.
 fn build_next_steps<'a>(is_dark: bool) -> Element<'a, Message> {
@@ -474,6 +548,7 @@ fn build_modal_footer<'a>(
     ))
     .size(12)
     .color(color)
+    .font(iced::font::Font::MONOSPACE)
     .into()
 }
 

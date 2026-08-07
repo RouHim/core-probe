@@ -50,7 +50,9 @@ pub fn render_app_update_modal<'a>(
                     background: Some(
                         Color {
                             a: 0.8,
-                            ..Color::BLACK
+                            r: 0.05,
+                            g: 0.06,
+                            b: 0.07,
                         }
                         .into(),
                     ),
@@ -127,31 +129,40 @@ fn build_prompt_content<'a>(
 ) -> Element<'a, Message> {
     let title = text(format!("Update available: v{}", release.version))
         .size(20)
-        .color(text_primary);
+        .color(text_primary)
+        .font(iced::font::Font::MONOSPACE);
 
     let body = text(&release.body).size(14).color(text_muted);
 
     let notes_scroll = column![body].spacing(4).height(Length::Fixed(160.0));
 
-    let button_bg = if is_dark {
-        gui_theme::DARK_BUTTON_BG
-    } else {
-        Color::from_rgb(0.85, 0.85, 0.85)
-    };
     let button_text = if is_dark {
-        gui_theme::DARK_BUTTON_TEXT
+        // Near-black on DARK_ACCENT (#5ab8e6): ≈ 8.4:1 contrast
+        Color::from_rgb(
+            0x10 as f32 / 255.0,
+            0x14 as f32 / 255.0,
+            0x18 as f32 / 255.0,
+        )
     } else {
-        Color::BLACK
+        // Off-white on LIGHT_ACCENT (#25668d): ≈ 5.6:1 contrast
+        gui_theme::DARK_TEXT_PRIMARY
     };
 
     let update_btn = button(text("Update").color(button_text))
         .on_press(Message::StartAppUpdate)
         .padding(iced::Padding::from([6, 18]))
         .style(move |_theme, _status| iced::widget::button::Style {
-            background: Some(button_bg.into()),
+            background: Some(
+                if is_dark {
+                    gui_theme::DARK_ACCENT
+                } else {
+                    gui_theme::LIGHT_ACCENT
+                }
+                .into(),
+            ),
             text_color: button_text,
             border: iced::Border {
-                radius: 4.0.into(),
+                radius: 6.0.into(),
                 ..Default::default()
             },
             ..Default::default()
@@ -164,7 +175,7 @@ fn build_prompt_content<'a>(
             background: Some(Color::TRANSPARENT.into()),
             text_color: text_muted,
             border: iced::Border {
-                radius: 4.0.into(),
+                radius: 6.0.into(),
                 ..Default::default()
             },
             ..Default::default()

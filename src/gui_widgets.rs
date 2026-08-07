@@ -68,6 +68,11 @@ pub fn header_view<'a>(
     } else {
         gui_theme::LIGHT_HEADER_BG
     };
+    let header_border = if is_dark {
+        gui_theme::DARK_CARD_BORDER
+    } else {
+        gui_theme::LIGHT_CARD_BORDER
+    };
 
     // Left section: CPU model + core/thread count badge
     let core_thread_badge = format!(
@@ -79,7 +84,10 @@ pub fn header_view<'a>(
     let left = column![
         text(&topology.model_name).size(20).color(text_primary),
         row![
-            text(core_thread_badge).size(14).color(text_secondary),
+            text(core_thread_badge)
+                .size(14)
+                .color(text_secondary)
+                .font(iced::font::Font::MONOSPACE),
             text(gen_badge).size(14).color(text_secondary),
         ]
         .spacing(12),
@@ -98,7 +106,23 @@ pub fn header_view<'a>(
     let theme_label = if is_dark { "\u{263e}" } else { "\u{2600}" };
     let theme_btn = button(text(theme_label).size(18))
         .on_press(Message::ThemeToggle)
-        .padding(Padding::from([4, 8]));
+        .padding(Padding::from([4, 10]))
+        .style(move |_theme: &iced::Theme, _status| button::Style {
+            background: Some(
+                if is_dark {
+                    gui_theme::DARK_BUTTON_BG
+                } else {
+                    gui_theme::LIGHT_BUTTON_BG
+                }
+                .into(),
+            ),
+            text_color: text_primary,
+            border: iced::Border {
+                radius: 6.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
 
     let content = row![left, right, theme_btn]
         .spacing(16)
@@ -109,6 +133,11 @@ pub fn header_view<'a>(
         .width(Length::Fill)
         .style(move |_theme: &iced::Theme| container::Style {
             background: Some(header_bg.into()),
+            border: iced::Border {
+                radius: 0.0.into(),
+                width: 1.0,
+                color: header_border,
+            },
             ..Default::default()
         })
         .into()
@@ -192,7 +221,7 @@ fn build_uefi_section<'a>(
         .style(move |_theme: &iced::Theme| container::Style {
             background: Some(badge_bg.into()),
             border: iced::Border {
-                radius: 4.0.into(),
+                radius: 10.0.into(),
                 ..Default::default()
             },
             ..Default::default()
@@ -213,7 +242,7 @@ fn build_uefi_section<'a>(
                     .into(),
                 ),
                 border: iced::Border {
-                    radius: 4.0.into(),
+                    radius: 6.0.into(),
                     width: 1.0,
                     color: if is_dark {
                         iced::Color::from_rgb(0.3, 0.3, 0.35)
@@ -257,9 +286,9 @@ fn classify_pbo_badge(status: Option<&str>) -> &'static str {
 
 fn pbo_tooltip_hint(badge_label: &str) -> &'static str {
     match badge_label {
-        "PBO: ENABLED" => "PBO is actively enabled — cores boost beyond stock limits.\nStability test results are most meaningful in this mode.",
-        "PBO: DISABLED" => "PBO is disabled — cores run at stock frequencies.\nStability issues are unlikely; test results may be less informative.",
-        "PBO: AUTO" => "PBO is set to BIOS default — the motherboard decides\nwhether to enable boosting. Actual behavior varies by vendor.",
+        "PBO: ENABLED" => "PBO is actively enabled - cores boost beyond stock limits.\nStability test results are most meaningful in this mode.",
+        "PBO: DISABLED" => "PBO is disabled - cores run at stock frequencies.\nStability issues are unlikely; test results may be less informative.",
+        "PBO: AUTO" => "PBO is set to BIOS default - the motherboard decides\nwhether to enable boosting. Actual behavior varies by vendor.",
         _ => "PBO status could not be determined from UEFI settings.",
     }
 }
@@ -280,7 +309,11 @@ fn build_limits_row<'a>(limits: &PboLimits, color: iced::Color) -> Element<'a, M
     } else {
         parts.join(" / ")
     };
-    text(label).size(12).color(color).into()
+    text(label)
+        .size(12)
+        .color(color)
+        .font(iced::font::Font::MONOSPACE)
+        .into()
 }
 
 // ---------------------------------------------------------------------------
@@ -346,7 +379,7 @@ fn co_badge<'a>(
         .style(move |_theme: &iced::Theme| container::Style {
             background: Some(bg.into()),
             border: iced::Border {
-                radius: 4.0.into(),
+                radius: 10.0.into(),
                 width: 1.0,
                 color: border,
             },
@@ -564,7 +597,10 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
                 if !time_str.is_empty() {
                     column![
                         container(progress_bar(0.0..=1.0, ratio)).height(Length::Fixed(6.0)),
-                        text(time_str.clone()).size(12).color(secondary_color)
+                        text(time_str.clone())
+                            .size(12)
+                            .color(secondary_color)
+                            .font(iced::font::Font::MONOSPACE)
                     ]
                     .spacing(4)
                     .into()
@@ -627,7 +663,10 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
             };
 
             let freq_display = tooltip(
-                text(freq_val).size(12).color(secondary_color),
+                text(freq_val)
+                    .size(12)
+                    .color(secondary_color)
+                    .font(iced::font::Font::MONOSPACE),
                 freq_tooltip,
                 TooltipPosition::Top,
             )
@@ -635,7 +674,10 @@ pub fn core_tile_view<'a>(data: &CoreTileData<'a>) -> Element<'a, Message> {
             .style(|_theme: &iced::Theme| container::Style::default());
 
             let thermal_row = row![
-                text(temp_str.0).size(12).color(temp_str.1),
+                text(temp_str.0)
+                    .size(12)
+                    .color(temp_str.1)
+                    .font(iced::font::Font::MONOSPACE),
                 Space::new().width(Length::Fill),
                 freq_display,
             ]
@@ -868,7 +910,7 @@ pub fn topology_grid_view<'a>(
     .style(move |_theme: &iced::Theme| container::Style {
         background: Some(bg_secondary.into()),
         border: iced::Border {
-            radius: 4.0.into(),
+            radius: 8.0.into(),
             width: 1.0,
             color: topo_border,
         },
@@ -949,7 +991,7 @@ pub fn config_panel_view<'a>(
 
     // Duration input
     let duration_label = text("Duration").size(13).color(text_secondary);
-    let mut duration_input = text_input("6m", &config.duration);
+    let mut duration_input = text_input("6m", &config.duration).font(iced::font::Font::MONOSPACE);
     if !test_running {
         duration_input =
             duration_input.on_input(|s| Message::ConfigChanged(ConfigField::Duration(s)));
@@ -958,7 +1000,7 @@ pub fn config_panel_view<'a>(
     // Iterations input
     let iterations_label = text("Iterations").size(13).color(text_secondary);
     let iterations_str = config.iterations.to_string();
-    let mut iterations_input = text_input("3", &iterations_str);
+    let mut iterations_input = text_input("3", &iterations_str).font(iced::font::Font::MONOSPACE);
     if !test_running {
         iterations_input = iterations_input.on_input(|s| {
             let n = s.parse::<u32>().unwrap_or(config.iterations);
@@ -1009,7 +1051,7 @@ pub fn config_panel_view<'a>(
         },
         ..Default::default()
     });
-    let mut cores_input = text_input("all", &config.cores);
+    let mut cores_input = text_input("all", &config.cores).font(iced::font::Font::MONOSPACE);
     if !test_running {
         cores_input = cores_input.on_input(|s| Message::ConfigChanged(ConfigField::Cores(s)));
     }
@@ -1029,7 +1071,7 @@ pub fn config_panel_view<'a>(
                 ),
                 text_color: iced::Color::WHITE,
                 border: iced::Border {
-                    radius: 4.0.into(),
+                    radius: 6.0.into(),
                     ..Default::default()
                 },
                 ..Default::default()
@@ -1049,7 +1091,7 @@ pub fn config_panel_view<'a>(
                 ),
                 text_color: iced::Color::WHITE,
                 border: iced::Border {
-                    radius: 4.0.into(),
+                    radius: 6.0.into(),
                     ..Default::default()
                 },
                 ..Default::default()
@@ -1081,7 +1123,10 @@ pub fn config_panel_view<'a>(
             } else {
                 row![
                     action_button,
-                    text(estimation).size(13).color(text_secondary),
+                    text(estimation)
+                        .size(13)
+                        .color(text_secondary)
+                        .font(iced::font::Font::MONOSPACE),
                 ]
                 .align_y(iced::Alignment::Center)
                 .spacing(8)
@@ -1102,7 +1147,7 @@ pub fn config_panel_view<'a>(
         .style(move |_theme: &iced::Theme| container::Style {
             background: Some(bg.into()),
             border: iced::Border {
-                radius: 4.0.into(),
+                radius: 8.0.into(),
                 width: 1.0,
                 color: border_color,
             },
@@ -1146,8 +1191,24 @@ pub fn log_feed_view<'a>(entries: &'a [LogEntry], is_dark: bool) -> Element<'a, 
         let entry_row = row![
             text(format!("[{}]", entry.timestamp))
                 .size(11)
-                .color(text_secondary),
-            container(text(level_str).size(10).color(level_color)).padding(Padding::from([1, 4])),
+                .color(text_secondary)
+                .font(iced::font::Font::MONOSPACE),
+            container(text(level_str).size(10).color(level_color))
+                .padding(Padding::from([1, 6]))
+                .style(move |_theme: &iced::Theme| container::Style {
+                    background: Some(
+                        iced::Color {
+                            a: 0.15,
+                            ..level_color
+                        }
+                        .into(),
+                    ),
+                    border: iced::Border {
+                        radius: 10.0.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
             text(&entry.message).size(12).color(text_primary),
         ]
         .spacing(8);
@@ -1174,7 +1235,7 @@ pub fn log_feed_view<'a>(entries: &'a [LogEntry], is_dark: bool) -> Element<'a, 
             .style(move |_theme: &iced::Theme| container::Style {
                 background: Some(log_bg.into()),
                 border: iced::Border {
-                    radius: 2.0.into(),
+                    radius: 8.0.into(),
                     width: 1.0,
                     color: log_border,
                 },
@@ -1216,14 +1277,14 @@ pub fn status_bar_view<'a>(
     let status_text = if test_running {
         match progress.current_core {
             Some(core) => format!(
-                "Testing Core {} \u{2014} {}/{} done",
+                "Testing Core {} - {}/{} done",
                 core, progress.cores_completed, progress.total_cores
             ),
             None => "Starting test...".to_string(),
         }
     } else if progress.total_cores > 0 && progress.cores_completed >= progress.total_cores {
         format!(
-            "Complete \u{2014} {}/{} cores tested",
+            "Complete - {}/{} cores tested",
             progress.cores_completed, progress.total_cores
         )
     } else {
@@ -1257,6 +1318,7 @@ pub fn status_bar_view<'a>(
         text(progress_info)
             .size(12)
             .color(text_secondary)
+            .font(iced::font::Font::MONOSPACE)
             .width(Length::FillPortion(1)),
     ]
     .spacing(12)

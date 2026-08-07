@@ -21,6 +21,20 @@ pub struct MceError {
     pub message: String,
     pub timestamp: String,
     pub apic_id: Option<u32>,
+    /// Classified at parse time. `true` means the event belongs to a shared
+    /// system unit (data fabric, memory controller, L3, ...) and must never
+    /// fail an individual core.
+    pub system_level: bool,
+}
+
+/// Whether an MCA bank is core-local and therefore eligible for per-core
+/// attribution. Banks 0-5 are the six per-core units (load_store, insn_fetch,
+/// l2_cache, decode_unit, execution_unit, floating_point) on AMD Zen parts.
+/// L3 (banks 6-13) is CCD-shared and intentionally excluded: an L3 error
+/// cannot be pinned to one core. Classification errs toward system-level,
+/// which never fails a core.
+fn is_core_local_bank(bank: u32) -> bool {
+    bank <= 5
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,12 +121,7 @@ impl MceMonitor {
             while !shutdown.load(Ordering::Relaxed) {
                 match fetcher(&last_check_time) {
                     Ok(stdout) => {
-                        let mut parsed = Vec::new();
-                        for line in stdout.lines() {
-                            if let Some(error) = parse_mce_or_edac_line(line) {
-                                parsed.push(error);
-                            }
-                        }
+                        let parsed = parse_mce_or_edac_lines(&stdout);
 
                         if !parsed.is_empty() {
                             if let Ok(mut guard) = errors.lock() {
@@ -172,6 +181,9 @@ impl MceMonitor {
         self.get_errors()
             .into_iter()
             .filter(|error| {
+                if error.system_level {
+                    return false;
+                }
                 let physical = error
                     .apic_id
                     .and_then(|apic| {
@@ -185,6 +197,16 @@ impl MceMonitor {
 
                 physical == Some(core_id)
             })
+            .collect()
+    }
+
+    /// All events classified as system-level (shared banks, memory controller,
+    /// unparseable hardware errors). These never fail a core and are surfaced
+    /// as informational events.
+    pub fn get_system_errors(&self) -> Vec<MceError> {
+        self.get_errors()
+            .into_iter()
+            .filter(|error| error.system_level)
             .collect()
     }
 }
@@ -236,6 +258,7 @@ fn parse_mce_or_edac_line(line: &str) -> Option<MceError> {
                 message: line.to_string(),
                 timestamp: extract_timestamp(line),
                 apic_id: extract_apic_id(line),
+                system_level: !bank.is_some_and(is_core_local_bank),
             });
         }
     }
@@ -248,6 +271,7 @@ fn parse_mce_or_edac_line(line: &str) -> Option<MceError> {
             message: line.to_string(),
             timestamp: extract_timestamp(line),
             apic_id: extract_apic_id(line),
+            system_level: true,
         });
     }
 
@@ -259,6 +283,7 @@ fn parse_mce_or_edac_line(line: &str) -> Option<MceError> {
             message: line.to_string(),
             timestamp: extract_timestamp(line),
             apic_id: extract_apic_id(line),
+            system_level: true,
         });
     }
 
@@ -266,16 +291,149 @@ fn parse_mce_or_edac_line(line: &str) -> Option<MceError> {
         let cpu_id = cpu_regex()
             .and_then(|regex| regex.captures(line))
             .and_then(|captures| captures.get(1))
-            .and_then(|cpu| cpu.as_str().parse::<u32>().ok())
-            .unwrap_or(0);
+            .and_then(|cpu| cpu.as_str().parse::<u32>().ok());
 
         return Some(MceError {
-            cpu_id,
+            cpu_id: cpu_id.unwrap_or(0),
             bank: None,
             error_type: MceErrorType::HardwareError,
             message: line.to_string(),
             timestamp: extract_timestamp(line),
             apic_id: extract_apic_id(line),
+            system_level: cpu_id.is_none(),
+        });
+    }
+
+    None
+}
+
+/// Scan a journalctl chunk and parse every MCE/EDAC event.
+///
+/// The modern kernel logs an MCE as a banner line followed by `[Hardware Error]`
+/// detail lines. Those detail lines must be grouped with their banner: on their
+/// own they carry the bank (e.g. `MC27_STATUS`) and reporting CPU, and only the
+/// full block yields a meaningful event. Old-format single-line events and EDAC
+/// lines pass through to `parse_mce_or_edac_line`.
+fn parse_mce_or_edac_lines(text: &str) -> Vec<MceError> {
+    const MAX_BLOCK_LINES: usize = 12;
+
+    let lines: Vec<&str> = text.lines().collect();
+    let mut errors = Vec::new();
+    let mut index = 0;
+
+    while index < lines.len() {
+        let line = lines[index];
+        let is_modern_banner = modern_mce_banner_regex().is_some_and(|regex| regex.is_match(line));
+        let is_old_header = machine_check_regex().is_some_and(|regex| regex.is_match(line));
+
+        if is_modern_banner || is_old_header {
+            let mut block = vec![line];
+            let mut cursor = index + 1;
+            while cursor < lines.len() && block.len() < MAX_BLOCK_LINES {
+                let candidate = lines[cursor];
+                let is_header = modern_mce_banner_regex()
+                    .is_some_and(|regex| regex.is_match(candidate))
+                    || machine_check_regex().is_some_and(|regex| regex.is_match(candidate));
+                if is_header {
+                    break;
+                }
+                if candidate.contains("[Hardware Error]") {
+                    block.push(candidate);
+                }
+                cursor += 1;
+            }
+
+            if let Some(error) = parse_mce_block(&block) {
+                errors.push(error);
+            } else if let Some(error) = parse_mce_or_edac_line(line) {
+                // Unparseable block noise: the lone header degrades to a
+                // system-level event, never core-attributed.
+                errors.push(error);
+            }
+            // Lines in the block region that were not `[Hardware Error]`
+            // continuations (e.g. interleaved EDAC lines) are parsed on their own.
+            for line in &lines[(index + 1)..cursor] {
+                if !line.contains("[Hardware Error]") {
+                    if let Some(error) = parse_mce_or_edac_line(line) {
+                        errors.push(error);
+                    }
+                }
+            }
+            index = cursor;
+            continue;
+        }
+
+        // A STATUS detail line whose banner fell in a previous poll chunk.
+        if mce_status_regex().is_some_and(|regex| regex.is_match(line)) {
+            if let Some(error) = parse_mce_block(&[line]) {
+                errors.push(error);
+            }
+            index += 1;
+            continue;
+        }
+
+        if let Some(error) = parse_mce_or_edac_line(line) {
+            errors.push(error);
+        }
+        index += 1;
+    }
+
+    errors
+}
+
+/// Parse one multi-line MCE block (banner + `[Hardware Error]` detail lines,
+/// or a standalone STATUS line) into a single `MceError`.
+fn parse_mce_block(block: &[&str]) -> Option<MceError> {
+    let first = block.first()?;
+    let timestamp = extract_timestamp(first);
+
+    // Old format: `mce: [Hardware Error]: CPU 0: Machine Check Exception: 5 Bank 27: ...`
+    if let Some(machine_check) = machine_check_regex() {
+        if let Some(captures) = block.iter().find_map(|line| machine_check.captures(line)) {
+            let cpu_id = captures.get(1)?.as_str().parse::<u32>().ok()?;
+            let bank = captures.get(2)?.as_str().parse::<u32>().ok();
+
+            return Some(MceError {
+                cpu_id,
+                bank,
+                error_type: MceErrorType::MachineCheck,
+                message: block.join("\n"),
+                timestamp,
+                apic_id: block.iter().find_map(|line| extract_apic_id(line)),
+                system_level: !bank.is_some_and(is_core_local_bank),
+            });
+        }
+    }
+
+    // Modern format: banner + detail lines with `MC<bank>_STATUS` and `CPU:<id>`.
+    // A standalone STATUS line (banner fell in a previous poll chunk) is also
+    // accepted here.
+    let is_modern = modern_mce_banner_regex().is_some_and(|regex| regex.is_match(first))
+        || mce_status_regex().is_some_and(|regex| regex.is_match(first));
+    if is_modern {
+        let bank = block.iter().find_map(|line| {
+            mce_status_regex().and_then(|regex| {
+                regex
+                    .captures(line)
+                    .and_then(|captures| captures.get(1))
+                    .and_then(|value| value.as_str().parse::<u32>().ok())
+            })
+        });
+        let cpu_id = block
+            .iter()
+            .find_map(|line| modern_cpu_regex().and_then(|regex| regex.captures(line)))
+            .and_then(|captures| captures.get(1))
+            .and_then(|value| value.as_str().parse::<u32>().ok());
+        let cpu_is_none = cpu_id.is_none();
+
+        return Some(MceError {
+            cpu_id: cpu_id.unwrap_or(0),
+            bank,
+            error_type: MceErrorType::MachineCheck,
+            message: block.join("\n"),
+            timestamp,
+            apic_id: block.iter().find_map(|line| extract_apic_id(line)),
+            system_level: bank.map_or(cpu_is_none, |value| !is_core_local_bank(value)),
         });
     }
 
@@ -429,6 +587,33 @@ fn apic_regex() -> Option<&'static Regex> {
         .ok()
 }
 
+/// Modern kernel multi-line MCE banner: `mce: [Hardware Error]: Machine check events logged`.
+fn modern_mce_banner_regex() -> Option<&'static Regex> {
+    static REGEX: OnceLock<Result<Regex, regex::Error>> = OnceLock::new();
+    REGEX
+        .get_or_init(|| Regex::new(r"(?i)mce:\s*\[hardware error\]:\s*machine check events logged"))
+        .as_ref()
+        .ok()
+}
+
+/// MCA bank in the modern STATUS detail line: `MC27_STATUS`.
+fn mce_status_regex() -> Option<&'static Regex> {
+    static REGEX: OnceLock<Result<Regex, regex::Error>> = OnceLock::new();
+    REGEX
+        .get_or_init(|| Regex::new(r"MC(\d+)_STATUS"))
+        .as_ref()
+        .ok()
+}
+
+/// Reporting CPU in the modern STATUS detail line: `CPU:0 (19:21:0)`.
+fn modern_cpu_regex() -> Option<&'static Regex> {
+    static REGEX: OnceLock<Result<Regex, regex::Error>> = OnceLock::new();
+    REGEX
+        .get_or_init(|| Regex::new(r"(?i)cpu:\s*(\d+)"))
+        .as_ref()
+        .ok()
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -447,6 +632,7 @@ mod tests {
         assert_eq!(parsed.bank, Some(27));
         assert_eq!(parsed.error_type, MceErrorType::MachineCheck);
         assert!(parsed.message.contains("Machine Check Exception"));
+        assert!(parsed.system_level);
     }
 
     #[test]
@@ -458,6 +644,7 @@ mod tests {
 
         assert_eq!(parsed.error_type, MceErrorType::HardwareError);
         assert_eq!(parsed.cpu_id, 3);
+        assert!(!parsed.system_level);
     }
 
     #[test]
@@ -468,6 +655,7 @@ mod tests {
 
         assert_eq!(parsed.error_type, MceErrorType::EdacCorrectable);
         assert_eq!(parsed.bank, None);
+        assert!(parsed.system_level);
     }
 
     #[test]
@@ -542,8 +730,8 @@ apicid : 16
             cpu_frequency_mhz: None,
         };
 
-        let stdout = "Feb 27 12:00:00 host kernel: mce: [Hardware Error]: CPU 0: Machine Check Exception: 5 Bank 27: bea0000001000108
-Feb 27 12:00:01 host kernel: mce: [Hardware Error]: CPU 8: Machine Check Exception: 5 Bank 10: deadbeef";
+        let stdout = "Feb 27 12:00:00 host kernel: mce: [Hardware Error]: CPU 0: Machine Check Exception: 5 Bank 2: bea0000001000108
+Feb 27 12:00:01 host kernel: mce: [Hardware Error]: CPU 8: Machine Check Exception: 5 Bank 3: deadbeef";
 
         let mut monitor = MceMonitor::new_with_overrides(
             Duration::from_millis(200),
@@ -563,6 +751,7 @@ Feb 27 12:00:01 host kernel: mce: [Hardware Error]: CPU 8: Machine Check Excepti
         assert_eq!(core0.len(), 1);
         assert_eq!(core6.len(), 1);
         assert_eq!(monitor.get_errors().len(), 2);
+        assert!(monitor.get_system_errors().is_empty());
     }
 
     #[test]
@@ -601,5 +790,130 @@ Feb 27 12:00:01 host kernel: mce: [Hardware Error]: CPU 8: Machine Check Excepti
         monitor.stop();
 
         assert!(monitor.get_errors().is_empty());
+    }
+
+    const MODERN_MCE_BLOCK: &str =
+        "Feb 27 12:00:00 host kernel: mce: [Hardware Error]: Machine check events logged
+[Hardware Error]: Corrected error, no action required.
+[Hardware Error]: CPU:0 (19:21:0) MC27_STATUS[Over|CE|MiscV|-|-|-|SyndV|-|-|-]: 0xd82000000002080b
+[Hardware Error]: IPID: 0x0001002e00000500, Syndrome: 0x000000005a020001
+[Hardware Error]: Power, Interrupts, etc. Ext. Error Code: 2
+[Hardware Error]: cache level: L3/GEN, mem/io: IO, mem-tx: GEN, part-proc: SRC (no timeout)";
+
+    #[test]
+    fn given_modern_kernel_mce_block_when_parsing_then_extracts_bank_and_cpu() {
+        let parsed = parse_mce_or_edac_lines(MODERN_MCE_BLOCK);
+
+        assert_eq!(parsed.len(), 1);
+        let error = &parsed[0];
+        assert_eq!(error.bank, Some(27));
+        assert_eq!(error.cpu_id, 0);
+        assert_eq!(error.error_type, MceErrorType::MachineCheck);
+        assert!(error.system_level);
+        assert!(error.message.contains("MC27_STATUS"));
+    }
+
+    #[test]
+    fn given_system_bank_mce_when_monitoring_then_not_attributed_to_core() {
+        let topology = CpuTopology {
+            vendor: "AuthenticAMD".to_string(),
+            model_name: "AMD Ryzen".to_string(),
+            physical_core_count: 1,
+            logical_cpu_count: 1,
+            core_map: BTreeMap::from([(0, vec![0])]),
+            bios_map: BTreeMap::from([(0, 0)]),
+            physical_map: BTreeMap::from([(0, 0)]),
+            cpu_brand: None,
+            cpu_frequency_mhz: None,
+        };
+
+        let mut monitor = MceMonitor::new_with_overrides(
+            Duration::from_millis(200),
+            Arc::new(move |_| Ok(MODERN_MCE_BLOCK.to_string())),
+            Arc::new(|| Ok("processor : 0\napicid : 0\n".to_string())),
+        );
+
+        monitor
+            .start(&topology)
+            .expect("monitor should start successfully");
+        thread::sleep(Duration::from_millis(80));
+        monitor.stop();
+
+        assert!(
+            monitor.get_errors_for_core(0).is_empty(),
+            "data-fabric bank 27 MCE must not be attributed to any core"
+        );
+        assert_eq!(monitor.get_system_errors().len(), 1);
+    }
+
+    #[test]
+    fn given_core_local_bank_mce_when_monitoring_then_attributed_to_core() {
+        let topology = CpuTopology {
+            vendor: "AuthenticAMD".to_string(),
+            model_name: "AMD Ryzen".to_string(),
+            physical_core_count: 2,
+            logical_cpu_count: 2,
+            core_map: BTreeMap::from([(0, vec![0]), (6, vec![8])]),
+            bios_map: BTreeMap::from([(0, 0), (6, 1)]),
+            physical_map: BTreeMap::from([(0, 0), (1, 6)]),
+            cpu_brand: None,
+            cpu_frequency_mhz: None,
+        };
+
+        let stdout = "Feb 27 12:00:00 host kernel: mce: [Hardware Error]: CPU 8: Machine Check Exception: 5 Bank 2: bea0000001000108";
+
+        let mut monitor = MceMonitor::new_with_overrides(
+            Duration::from_millis(200),
+            Arc::new(move |_| Ok(stdout.to_string())),
+            Arc::new(|| Ok("processor : 0\napicid : 0\nprocessor : 8\napicid : 16\n".to_string())),
+        );
+
+        monitor
+            .start(&topology)
+            .expect("monitor should start successfully");
+        thread::sleep(Duration::from_millis(80));
+        monitor.stop();
+
+        let core6 = monitor.get_errors_for_core(6);
+        assert_eq!(core6.len(), 1);
+        assert_eq!(core6[0].bank, Some(2));
+        assert!(!core6[0].system_level);
+        assert!(monitor.get_system_errors().is_empty());
+    }
+
+    #[test]
+    fn given_banner_only_mce_when_monitoring_then_system_level() {
+        let topology = CpuTopology {
+            vendor: "AuthenticAMD".to_string(),
+            model_name: "AMD Ryzen".to_string(),
+            physical_core_count: 1,
+            logical_cpu_count: 1,
+            core_map: BTreeMap::from([(0, vec![0])]),
+            bios_map: BTreeMap::from([(0, 0)]),
+            physical_map: BTreeMap::from([(0, 0)]),
+            cpu_brand: None,
+            cpu_frequency_mhz: None,
+        };
+
+        let stdout =
+            "Feb 27 12:00:00 host kernel: mce: [Hardware Error]: Machine check events logged";
+
+        let mut monitor = MceMonitor::new_with_overrides(
+            Duration::from_millis(200),
+            Arc::new(move |_| Ok(stdout.to_string())),
+            Arc::new(|| Ok("processor : 0\napicid : 0\n".to_string())),
+        );
+
+        monitor
+            .start(&topology)
+            .expect("monitor should start successfully");
+        thread::sleep(Duration::from_millis(80));
+        monitor.stop();
+
+        assert!(
+            monitor.get_errors_for_core(0).is_empty(),
+            "banner-only event must not be attributed to a core"
+        );
+        assert_eq!(monitor.get_system_errors().len(), 1);
     }
 }

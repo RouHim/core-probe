@@ -35,7 +35,26 @@ pub const DARK_BG_TERTIARY: Color = Color::from_rgb(
     0x2a as f32 / 255.0,
 );
 
-pub const DARK_TEXT_PRIMARY: Color = Color::WHITE;
+/// Single app accent (cyan-blue instrument hue). Used for progress fill,
+/// `Palette.primary` (pick_list/focus/scrollbars), and the Update button.
+/// Contrast: dark `#5ab8e6` + near-black text ≈ 8.4:1; light `#25668d` +
+/// off-white text ≈ 5.6:1. Semantic status colors are separate and unchanged.
+pub const DARK_ACCENT: Color = Color::from_rgb(
+    0x5a as f32 / 255.0,
+    0xb8 as f32 / 255.0,
+    0xe6 as f32 / 255.0,
+);
+pub const LIGHT_ACCENT: Color = Color::from_rgb(
+    0x25 as f32 / 255.0,
+    0x66 as f32 / 255.0,
+    0x8d as f32 / 255.0,
+);
+
+pub const DARK_TEXT_PRIMARY: Color = Color::from_rgb(
+    0xf0 as f32 / 255.0,
+    0xf2 as f32 / 255.0,
+    0xf5 as f32 / 255.0,
+);
 pub const DARK_TEXT_SECONDARY: Color = Color::from_rgb(
     0xb3 as f32 / 255.0,
     0xb3 as f32 / 255.0,
@@ -63,18 +82,18 @@ pub const DARK_STATUS_BAR_BG: Color = Color::from_rgb(
     0x1a as f32 / 255.0,
 );
 
-pub const DARK_PROGRESS_FILL: Color = Color::from_rgb(
-    0x4c as f32 / 255.0,
-    0xaf as f32 / 255.0,
-    0x50 as f32 / 255.0,
-);
+pub const DARK_PROGRESS_FILL: Color = DARK_ACCENT;
 pub const DARK_PROGRESS_BG: Color = Color::from_rgb(
     0x33 as f32 / 255.0,
     0x33 as f32 / 255.0,
     0x33 as f32 / 255.0,
 );
 
-pub const DARK_LOG_BG: Color = Color::BLACK;
+pub const DARK_LOG_BG: Color = Color::from_rgb(
+    0x0a as f32 / 255.0,
+    0x0c as f32 / 255.0,
+    0x0e as f32 / 255.0,
+);
 
 pub const DARK_BADGE_PBO_BG: Color = Color::from_rgb(
     0x31 as f32 / 255.0,
@@ -258,7 +277,11 @@ pub const LIGHT_BG_TERTIARY: Color = Color::from_rgb(
     0xe0 as f32 / 255.0,
 );
 
-pub const LIGHT_TEXT_PRIMARY: Color = Color::BLACK;
+pub const LIGHT_TEXT_PRIMARY: Color = Color::from_rgb(
+    0x16 as f32 / 255.0,
+    0x19 as f32 / 255.0,
+    0x1d as f32 / 255.0,
+);
 pub const LIGHT_TEXT_SECONDARY: Color = Color::from_rgb(
     0x42 as f32 / 255.0,
     0x42 as f32 / 255.0,
@@ -286,11 +309,7 @@ pub const LIGHT_STATUS_BAR_BG: Color = Color::from_rgb(
     0xee as f32 / 255.0,
 );
 
-pub const LIGHT_PROGRESS_FILL: Color = Color::from_rgb(
-    0x4c as f32 / 255.0,
-    0xaf as f32 / 255.0,
-    0x50 as f32 / 255.0,
-);
+pub const LIGHT_PROGRESS_FILL: Color = LIGHT_ACCENT;
 pub const LIGHT_PROGRESS_BG: Color = Color::from_rgb(
     0xe0 as f32 / 255.0,
     0xe0 as f32 / 255.0,
@@ -298,9 +317,9 @@ pub const LIGHT_PROGRESS_BG: Color = Color::from_rgb(
 );
 
 pub const LIGHT_LOG_BG: Color = Color::from_rgb(
-    0xff as f32 / 255.0,
-    0xff as f32 / 255.0,
-    0xff as f32 / 255.0,
+    0xfa as f32 / 255.0,
+    0xfa as f32 / 255.0,
+    0xfa as f32 / 255.0,
 );
 
 pub const LIGHT_BADGE_PBO_BG: Color = Color::from_rgb(
@@ -937,6 +956,22 @@ pub fn sparkline_opacity(load_pct: f32) -> f32 {
 mod tests {
     use super::*;
     use crate::co_tier::CoTier;
+
+    #[test]
+    fn given_dark_theme_when_created_then_primary_is_accent() {
+        let theme = dark_theme();
+        let palette = theme.palette();
+        assert_eq!(palette.primary, DARK_ACCENT);
+        assert_ne!(palette.primary, DARK_CORE_PASSED_BG);
+    }
+
+    #[test]
+    fn given_light_theme_when_created_then_primary_is_accent() {
+        let theme = light_theme();
+        let palette = theme.palette();
+        assert_eq!(palette.primary, LIGHT_ACCENT);
+        assert_ne!(palette.primary, LIGHT_CORE_PASSED_BG);
+    }
 
     #[test]
     fn given_dark_theme_when_created_then_uses_wireframe_background() {

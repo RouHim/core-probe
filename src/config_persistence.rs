@@ -125,9 +125,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
 
-        let mut config = TestConfig::default();
-        config.duration = String::from("12m");
-        config.iterations = 3;
+        let config = TestConfig {
+            duration: String::from("12m"),
+            iterations: 3,
+            ..Default::default()
+        };
         let theme = ThemeMode::Light;
 
         save_at(&path, &config, theme);

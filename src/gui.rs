@@ -100,6 +100,9 @@ pub struct ModalContent {
     pub iterations_completed: u32,
     pub qr_content: String,
     pub interrupted: bool,
+    /// System-level MCE/EDAC events (data fabric, memory controller, ...).
+    /// Informational only; never attributed to a core.
+    pub system_mce_errors: Vec<MceError>,
 }
 
 #[derive(Debug, Clone)]
@@ -583,11 +586,20 @@ pub fn view(state: &CoreProbeApp) -> Element<'_, Message> {
                 if is_dark {
                     iced::Color::from_rgb(0.45, 0.12, 0.12)
                 } else {
-                    iced::Color::from_rgb(0.9, 0.25, 0.25)
+                    iced::Color::from_rgb(0.72, 0.18, 0.18)
                 }
                 .into(),
             ),
             text_color: Some(iced::Color::WHITE),
+            border: iced::Border {
+                radius: 8.0.into(),
+                width: 1.0,
+                color: if is_dark {
+                    crate::gui_theme::DARK_ERROR_BORDER
+                } else {
+                    crate::gui_theme::LIGHT_ERROR_BORDER
+                },
+            },
             ..Default::default()
         });
 
@@ -792,6 +804,21 @@ fn process_event(state: &mut CoreProbeApp, event: TestEvent) {
                 results.iterations_completed,
                 results.interrupted,
             );
+            if let Some(modal) = &mut state.modal_content {
+                modal.system_mce_errors = results.system_mce_errors.clone();
+            } else if !results.system_mce_errors.is_empty() {
+                // All cores passed but system-level MCEs fired: still surface
+                // them in a minimal result modal.
+                state.modal_content = Some(ModalContent {
+                    unstable_cores: Vec::new(),
+                    stable_core_indices: Vec::new(),
+                    total_duration: results.total_duration,
+                    iterations_completed: results.iterations_completed,
+                    qr_content: gui_qr::build_qr_content(&[]),
+                    interrupted: results.interrupted,
+                    system_mce_errors: results.system_mce_errors.clone(),
+                });
+            }
         }
         TestEvent::LogMessage { level, message } => {
             append_log(state, level, message);
@@ -980,6 +1007,7 @@ pub fn build_modal_content(
         iterations_completed,
         qr_content,
         interrupted,
+        system_mce_errors: Vec::new(),
     })
 }
 
@@ -1112,7 +1140,10 @@ pub(crate) fn parse_duration(input: &str) -> Duration {
     Duration::from_secs(total_secs)
 }
 
-fn parse_core_filter(input: &str, topology: &CpuTopology) -> Result<Option<Vec<u32>>, String> {
+pub(crate) fn parse_core_filter(
+    input: &str,
+    topology: &CpuTopology,
+) -> Result<Option<Vec<u32>>, String> {
     let trimmed = input.trim();
     if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("all") {
         return Ok(None);
@@ -1167,7 +1198,7 @@ fn parse_core_filter(input: &str, topology: &CpuTopology) -> Result<Option<Vec<u
 
 pub fn run_gui() -> iced::Result {
     iced::application(boot, update, view)
-        .title("core-probe — CPU Stability Tester")
+        .title("core-probe - CPU Stability Tester")
         .subscription(subscription)
         .theme(theme)
         .window_size(iced::Size::new(1400.0, 900.0))
@@ -1520,6 +1551,7 @@ mod tests {
                     total_duration: Duration::from_secs(120),
                     iterations_completed: 1,
                     interrupted: false,
+                    system_mce_errors: Vec::new(),
                 },
             },
         );
@@ -1575,6 +1607,7 @@ mod tests {
                     total_duration: Duration::from_secs(120),
                     iterations_completed: 1,
                     interrupted: false,
+                    system_mce_errors: Vec::new(),
                 },
             },
         );
@@ -1588,6 +1621,135 @@ mod tests {
         assert!(modal.unstable_cores[0]
             .error_summary
             .ends_with("(physical ID)"));
+    }
+
+    /// BDD: Given system-level MCEs collected during a failed test, when
+    /// TestCompleted is processed, then the modal carries them for display.
+    #[test]
+    fn given_system_mce_errors_when_test_completed_then_modal_content_shows_them() {
+        use crate::error_parser::{MprimeError, MprimeErrorType};
+
+        let topology = topology_with_non_contiguous_physical_ids();
+        let mut app = make_app();
+        app.topology = Some(topology);
+        app.test_running = true;
+
+        app.core_statuses.insert(0, CoreStatus::Failed);
+        app.core_results.insert(
+            0,
+            CoreResultInfo {
+                mprime_errors: vec![MprimeError {
+                    error_type: MprimeErrorType::HardwareFailure,
+                    message: String::from("Hardware failure detected"),
+                    fft_size: None,
+                    timestamp: None,
+                }],
+                mce_errors: Vec::new(),
+                duration_tested: Duration::from_secs(120),
+                iterations_completed: 1,
+            },
+        );
+
+        process_event(
+            &mut app,
+            TestEvent::TestCompleted {
+                results: crate::coordinator::CycleResults {
+                    results: vec![CoreTestResult {
+                        physical_core_id: 0,
+                        bios_index: 0,
+                        logical_cpu_ids: vec![0, 1],
+                        status: CoreStatus::Failed,
+                        mprime_errors: Vec::new(),
+                        mce_errors: Vec::new(),
+                        duration_tested: Duration::from_secs(120),
+                        iterations_completed: 1,
+                        freq_samples: Vec::new(),
+                        freq_max_khz: None,
+                        cooldown_count: 0,
+                    }],
+                    total_duration: Duration::from_secs(120),
+                    iterations_completed: 1,
+                    interrupted: false,
+                    system_mce_errors: vec![crate::mce_monitor::MceError {
+                        cpu_id: 0,
+                        bank: Some(27),
+                        error_type: crate::mce_monitor::MceErrorType::MachineCheck,
+                        message: String::from("data fabric MCE"),
+                        timestamp: String::from("11:36:33"),
+                        apic_id: None,
+                        system_level: true,
+                    }],
+                },
+            },
+        );
+
+        let modal = app
+            .modal_content
+            .as_ref()
+            .expect("expected modal content after completed test");
+        assert_eq!(modal.system_mce_errors.len(), 1);
+        assert_eq!(modal.system_mce_errors[0].bank, Some(27));
+    }
+
+    /// BDD: Given all cores passed but system-level MCEs fired, when
+    /// TestCompleted is processed, then a minimal modal surfaces the events.
+    #[test]
+    fn given_all_stable_with_system_mce_when_test_completed_then_modal_shows_system_events() {
+        let topology = topology_with_non_contiguous_physical_ids();
+        let mut app = make_app();
+        app.topology = Some(topology);
+        app.test_running = true;
+
+        app.core_statuses.insert(0, CoreStatus::Passed);
+        app.core_results.insert(
+            0,
+            CoreResultInfo {
+                mprime_errors: Vec::new(),
+                mce_errors: Vec::new(),
+                duration_tested: Duration::from_secs(120),
+                iterations_completed: 1,
+            },
+        );
+
+        process_event(
+            &mut app,
+            TestEvent::TestCompleted {
+                results: crate::coordinator::CycleResults {
+                    results: vec![CoreTestResult {
+                        physical_core_id: 0,
+                        bios_index: 0,
+                        logical_cpu_ids: vec![0, 1],
+                        status: CoreStatus::Passed,
+                        mprime_errors: Vec::new(),
+                        mce_errors: Vec::new(),
+                        duration_tested: Duration::from_secs(120),
+                        iterations_completed: 1,
+                        freq_samples: Vec::new(),
+                        freq_max_khz: None,
+                        cooldown_count: 0,
+                    }],
+                    total_duration: Duration::from_secs(120),
+                    iterations_completed: 1,
+                    interrupted: false,
+                    system_mce_errors: vec![crate::mce_monitor::MceError {
+                        cpu_id: 0,
+                        bank: Some(27),
+                        error_type: crate::mce_monitor::MceErrorType::MachineCheck,
+                        message: String::from("data fabric MCE"),
+                        timestamp: String::from("11:36:33"),
+                        apic_id: None,
+                        system_level: true,
+                    }],
+                },
+            },
+        );
+
+        let modal = app
+            .modal_content
+            .as_ref()
+            .expect("expected modal content when system MCEs exist");
+        assert!(modal.unstable_cores.is_empty());
+        assert_eq!(modal.system_mce_errors.len(), 1);
     }
 
     /// BDD: Given pre-existing progress, when TestStarted, then per-core progress cleared
@@ -1707,6 +1869,7 @@ mod tests {
                     message: String::from("MCE"),
                     timestamp: String::from("2026-01-01T00:00:00Z"),
                     apic_id: None,
+                    system_level: false,
                 }],
                 duration_tested: Duration::from_secs(120),
                 iterations_completed: 1,
@@ -1814,6 +1977,7 @@ mod tests {
                     message: String::from("MCE"),
                     timestamp: String::from("2026-01-01T00:00:00Z"),
                     apic_id: None,
+                    system_level: false,
                 }],
                 duration_tested: Duration::from_secs(120),
                 iterations_completed: 1,
@@ -1897,6 +2061,7 @@ mod tests {
             iterations_completed: 1,
             qr_content: String::new(),
             interrupted: false,
+            system_mce_errors: Vec::new(),
         });
 
         let _ = update(&mut app, Message::DismissModal);
@@ -1914,6 +2079,7 @@ mod tests {
             iterations_completed: 1,
             qr_content: String::new(),
             interrupted: false,
+            system_mce_errors: Vec::new(),
         });
         app.test_running = true;
 

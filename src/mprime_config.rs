@@ -30,6 +30,22 @@ pub enum StressTestMode {
     },
 }
 
+impl std::str::FromStr for StressTestMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "sse" => Ok(Self::SSE),
+            "avx" => Ok(Self::AVX),
+            "avx2" => Ok(Self::AVX2),
+            "avx512" => Ok(Self::AVX512),
+            other => Err(format!(
+                "unknown stress mode '{other}' (expected sse, avx, avx2, or avx512)"
+            )),
+        }
+    }
+}
+
 /// FFT size presets matching CoreCycler configurations.
 ///
 /// FFT sizes determine which CPU components are stressed:
@@ -304,7 +320,7 @@ ResultsFile=results.txt
             avx512f = avx512f,
             error_check = self.error_check as u8,
             threads = self.threads,
-            computer_guid = &self.computer_guid,
+            computer_guid = self.computer_guid,
         );
 
         Ok(config)
@@ -757,5 +773,54 @@ mod tests {
         assert_eq!(presets[4], FftPreset::Moderate);
         assert_eq!(presets[5], FftPreset::Heavy);
         assert_eq!(presets[6], FftPreset::HeavyShort);
+    }
+
+    #[test]
+    fn given_avx2_string_when_parsing_then_returns_avx2_mode() {
+        // Given: "avx2" string
+        let input = "avx2";
+
+        // When: Parsing as StressTestMode
+        let parsed = input.parse::<StressTestMode>();
+
+        // Then: Returns AVX2 mode
+        assert_eq!(parsed, Ok(StressTestMode::AVX2));
+    }
+
+    #[test]
+    fn given_uppercase_sse_string_when_parsing_then_returns_sse_mode() {
+        // Given: "SSE" string
+        let input = "SSE";
+
+        // When: Parsing as StressTestMode
+        let parsed = input.parse::<StressTestMode>();
+
+        // Then: Returns SSE mode (case-insensitive)
+        assert_eq!(parsed, Ok(StressTestMode::SSE));
+    }
+
+    #[test]
+    fn given_whitespace_padded_string_when_parsing_then_returns_error() {
+        // Given: " custom " string
+        let input = " custom ";
+
+        // When: Parsing as StressTestMode
+        let parsed = input.parse::<StressTestMode>();
+
+        // Then: Returns an error (custom mode is GUI-only)
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn given_bogus_string_when_parsing_then_returns_error() {
+        // Given: "bogus" string
+        let input = "bogus";
+
+        // When: Parsing as StressTestMode
+        let parsed = input.parse::<StressTestMode>();
+
+        // Then: Returns an error with a helpful message
+        let err = parsed.unwrap_err();
+        assert!(err.contains("unknown stress mode 'bogus'"), "got: {err}");
     }
 }

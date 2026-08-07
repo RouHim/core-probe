@@ -1,3 +1,4 @@
+pub mod cli;
 pub mod co_decoder;
 pub mod co_heuristic;
 pub mod co_offsets;
@@ -56,6 +57,18 @@ fn main() {
         .with_timer(tracing_subscriber::fmt::time::LocalTime::rfc_3339())
         .with_writer(std::io::stderr)
         .init();
+
+    let args: cli::CliArgs = argh::from_env();
+    if args.cli {
+        let code = match cli::run(args) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("Error: {e:#}");
+                2
+            }
+        };
+        std::process::exit(code);
+    }
 
     if let Err(e) = gui::run_gui() {
         eprintln!("Error: {e}");
