@@ -122,11 +122,8 @@ fn matches_generation_token(token: &str, leading_digit: char) -> bool {
     let Some(fourth) = chars.next() else {
         return false;
     };
-    if !fourth.is_ascii_digit() {
-        return false;
-    }
 
-    true
+    fourth.is_ascii_digit()
 }
 
 #[cfg(test)]

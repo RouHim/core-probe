@@ -1814,9 +1814,9 @@ mod tests {
         assert_eq!(results.results.len(), 4);
         assert_eq!(results.results[0].physical_core_id, 0);
         assert_eq!(results.results[0].status, CoreStatus::Failed);
-        for i in 1..=3 {
-            assert_eq!(results.results[i].physical_core_id, 1);
-            assert_eq!(results.results[i].status, CoreStatus::Passed);
+        for result in &results.results[1..] {
+            assert_eq!(result.physical_core_id, 1);
+            assert_eq!(result.status, CoreStatus::Passed);
         }
         // Core 0 was only started once, core 1 was started 3 times
         assert_eq!(runner.start_order, vec![0, 1, 1, 1]);
