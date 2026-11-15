@@ -17,7 +17,7 @@ jobs:
   check-repo:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Trivy vulnerability scan
         uses: aquasecurity/trivy-action@master
         with:
@@ -29,7 +29,7 @@ jobs:
   check-code-style:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: Swatinem/rust-cache@v2
         with:
@@ -40,7 +40,7 @@ jobs:
   check-code:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Download mprime binaries
         run: |
           mkdir -p mprime-latest
@@ -56,7 +56,7 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Download mprime binaries
         run: |
           mkdir -p mprime-latest
@@ -75,7 +75,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Download mprime binaries
         run: |
           mkdir -p mprime-latest
@@ -91,7 +91,7 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Download mprime binaries
         run: |
           mkdir -p mprime-latest
@@ -115,7 +115,7 @@ jobs:
       released: ${{ steps.release.outputs.released }}
       version: ${{ steps.release.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           token: ${{ secrets.RELEASE_TOKEN }}
       - uses: actions/setup-node@v4
@@ -134,7 +134,7 @@ jobs:
     if: needs.create-release.result == 'success' && needs.create-release.outputs.released == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.create-release.outputs.version }}
       - name: Download mprime binaries
@@ -166,7 +166,7 @@ jobs:
     if: needs.create-release.result == 'success' && needs.create-release.outputs.released == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.create-release.outputs.version }}
       - name: Setup SSH for AUR
@@ -195,7 +195,7 @@ jobs:
     if: needs.build.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.create-release.outputs.version }}
       - name: Setup SSH for AUR
